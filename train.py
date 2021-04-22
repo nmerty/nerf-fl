@@ -183,8 +183,8 @@ class NeRFSystem(LightningModule):
 def main(hparams):
     system = NeRFSystem(hparams)
     checkpoint_callback = \
-        ModelCheckpoint(filepath=os.path.join(f'ckpts/{hparams.exp_name}',
-                                               '{epoch:d}'),
+        ModelCheckpoint(filepath=os.path.join(hparams.save_path, hparams.exp_name,
+                                              '{epoch:d}'),
                         monitor='val/psnr',
                         mode='max',
                         save_top_k=-1)
