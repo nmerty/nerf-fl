@@ -110,6 +110,7 @@ class NeRFSystem(LightningModule):
             kwargs['img_downscale'] = self.hparams.img_downscale
             kwargs['val_num'] = self.hparams.num_gpus
             kwargs['use_cache'] = self.hparams.use_cache
+            kwargs['refine_pose'] = self.hparams.refine_pose
         elif self.hparams.dataset_name == 'blender':
             kwargs['img_wh'] = tuple(self.hparams.img_wh)
             kwargs['perturbation'] = self.hparams.data_perturb

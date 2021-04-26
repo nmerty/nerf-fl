@@ -8,13 +8,15 @@ import pickle
 from PIL import Image
 from torchvision import transforms as T
 
+from models.poses import LearnPose
+from utils.lie_group_helper import convert3x4_4x4
 from .ray_utils import *
 from .colmap_utils import \
     read_cameras_binary, read_images_binary, read_points3d_binary
 
 
 class PhototourismDataset(Dataset):
-    def __init__(self, root_dir, split='train', img_downscale=1, val_num=1, use_cache=False):
+    def __init__(self, root_dir, split='train', img_downscale=1, val_num=1, use_cache=False, refine_pose=False):
         """
         img_downscale: how much scale to downsample the training images.
                        The original image sizes are around 500~100, so value of 1 or 2
@@ -27,6 +29,7 @@ class PhototourismDataset(Dataset):
         """
         self.root_dir = root_dir
         self.split = split
+        self.refine_pose = refine_pose
         assert img_downscale >= 1, 'image can only be downsampled, please set img_downscale>=1!'
         self.img_downscale = img_downscale
         if split == 'val': # image downscale=1 will cause OOM in val mode
@@ -135,8 +138,13 @@ class PhototourismDataset(Dataset):
             for k in self.fars:
                 self.fars[k] /= scale_factor
             self.xyz_world /= scale_factor
-        self.poses_dict = {id_: self.poses[i] for i, id_ in enumerate(self.img_ids)}
-            
+        if self.refine_pose:
+            c2ws = convert3x4_4x4(torch.from_numpy(self.poses))
+            learn_poses = LearnPose(len(self.Ks.keys()), True, True, init_c2w=c2ws.float())
+            self.poses_dict = {id_: learn_poses.forward(i)[:3] for i, id_ in enumerate(self.img_ids)}
+        else:
+            self.poses_dict = {id_: self.poses[i] for i, id_ in enumerate(self.img_ids)}
+
         # Step 5. split the img_ids (the number of images is verfied to match that in the paper)
         self.img_ids_train = [id_ for i, id_ in enumerate(self.img_ids) 
                                     if self.files.loc[i, 'split']=='train']
@@ -146,7 +154,7 @@ class PhototourismDataset(Dataset):
         self.N_images_test = len(self.img_ids_test)
 
         if self.split == 'train': # create buffer of all rays and rgb data
-            if self.use_cache:
+            if self.use_cache and not self.refine_pose:
                 all_rays = np.load(os.path.join(self.root_dir,
                                                 f'cache/rays{self.img_downscale}.npy'))
                 self.all_rays = torch.from_numpy(all_rays)
