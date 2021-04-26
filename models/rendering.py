@@ -102,7 +102,10 @@ def render_rays(models,
         out_chunks = []
         if typ=='coarse' and test_time:
             for i in range(0, B, chunk):
-                xyz_embedded = embedding_xyz(xyz_[i:i+chunk])
+                if model.refine_pose:  # BARF
+                    xyz_embedded = embedding_xyz(xyz_[i:i + chunk], kwargs.get('current_epoch'))
+                else:
+                    xyz_embedded = embedding_xyz(xyz_[i:i+chunk])
                 out_chunks += [model(xyz_embedded, sigma_only=True)]
             out = torch.cat(out_chunks, 0)
             static_sigmas = rearrange(out, '(n1 n2) 1 -> n1 n2', n1=N_rays, n2=N_samples_)
@@ -115,7 +118,10 @@ def render_rays(models,
                 t_embedded_ = repeat(t_embedded, 'n1 c -> (n1 n2) c', n2=N_samples_)
             for i in range(0, B, chunk):
                 # inputs for original NeRF
-                inputs = [embedding_xyz(xyz_[i:i+chunk]), dir_embedded_[i:i+chunk]]
+                if model.refine_pose:
+                    inputs = [embedding_xyz(xyz_[i:i+chunk], kwargs.get('current_epoch')), dir_embedded_[i:i+chunk]]
+                else:
+                    inputs = [embedding_xyz(xyz_[i:i + chunk]), dir_embedded_[i:i + chunk]]
                 # additional inputs for NeRF-W
                 if model.encode_appearance:
                     inputs += [a_embedded_[i:i+chunk]]
@@ -226,7 +232,10 @@ def render_rays(models,
     rays_o, rays_d = rays[:, 0:3], rays[:, 3:6] # both (N_rays, 3)
     near, far = rays[:, 6:7], rays[:, 7:8] # both (N_rays, 1)
     # Embed direction
-    dir_embedded = embedding_dir(kwargs.get('view_dir', rays_d))
+    if models['coarse'].refine_pose:  # BARF
+        dir_embedded = embedding_dir(kwargs.get('view_dir', rays_d), kwargs.get('current_epoch'))
+    else:
+        dir_embedded = embedding_dir(kwargs.get('view_dir', rays_d))
 
     rays_o = rearrange(rays_o, 'n1 c -> n1 1 c')
     rays_d = rearrange(rays_d, 'n1 c -> n1 1 c')

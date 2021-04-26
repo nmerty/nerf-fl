@@ -33,8 +33,13 @@ class NeRFSystem(LightningModule):
         self.loss = loss_dict['nerfw'](coef=1)
 
         self.models_to_train = []
-        self.embedding_xyz = PosEmbedding(hparams.N_emb_xyz-1, hparams.N_emb_xyz)
-        self.embedding_dir = PosEmbedding(hparams.N_emb_dir-1, hparams.N_emb_dir)
+
+        if hparams.refine_pose:
+            self.embedding_xyz = BarfPosEmbedding(hparams.N_emb_xyz-1, hparams.N_emb_xyz, 4, 8)
+            self.embedding_dir = BarfPosEmbedding(hparams.N_emb_dir-1, hparams.N_emb_dir, 4, 8)
+        else:
+            self.embedding_xyz = PosEmbedding(hparams.N_emb_xyz - 1, hparams.N_emb_xyz)
+            self.embedding_dir = PosEmbedding(hparams.N_emb_dir - 1, hparams.N_emb_dir)
         self.embeddings = {'xyz': self.embedding_xyz,
                            'dir': self.embedding_dir}
 
@@ -49,7 +54,8 @@ class NeRFSystem(LightningModule):
 
         self.nerf_coarse = NeRF('coarse',
                                 in_channels_xyz=6*hparams.N_emb_xyz+3,
-                                in_channels_dir=6*hparams.N_emb_dir+3)
+                                in_channels_dir=6*hparams.N_emb_dir+3,
+                                refine_pose=hparams.refine_pose)
         self.models = {'coarse': self.nerf_coarse}
         if hparams.N_importance > 0:
             self.nerf_fine = NeRF('fine',
@@ -59,7 +65,8 @@ class NeRFSystem(LightningModule):
                                   in_channels_a=hparams.N_a,
                                   encode_transient=hparams.encode_t,
                                   in_channels_t=hparams.N_tau,
-                                  beta_min=hparams.beta_min)
+                                  beta_min=hparams.beta_min,
+                                  refine_pose=hparams.refine_pose)
             self.models['fine'] = self.nerf_fine
         self.models_to_train += [self.models]
 
@@ -70,6 +77,8 @@ class NeRFSystem(LightningModule):
 
     def forward(self, rays, ts):
         """Do batched inference on rays using chunk."""
+        kwargs = {'current_epoch': self.current_epoch}
+
         B = rays.shape[0]
         results = defaultdict(list)
         for i in range(0, B, self.hparams.chunk):
@@ -84,7 +93,8 @@ class NeRFSystem(LightningModule):
                             self.hparams.noise_std,
                             self.hparams.N_importance,
                             self.hparams.chunk, # chunk size is effective in val mode
-                            self.train_dataset.white_back)
+                            self.train_dataset.white_back,
+                            **kwargs)
 
             for k, v in rendered_ray_chunks.items():
                 results[k] += [v]

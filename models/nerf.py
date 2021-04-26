@@ -1,5 +1,7 @@
 import torch
 from torch import nn
+pi = torch.acos(torch.zeros(1)).item() * 2 # which is 3.1415927410125732
+
 
 class PosEmbedding(nn.Module):
     def __init__(self, max_logscale, N_freqs, logscale=True):
@@ -30,13 +32,58 @@ class PosEmbedding(nn.Module):
         return torch.cat(out, -1)
 
 
+class BarfPosEmbedding(PosEmbedding):
+    def __init__(self, max_logscale, N_freqs, epoch_start, epoch_end, logscale=True):
+        """
+        Defines a function that embeds x to (x, sin(2^k x), cos(2^k x), ...)
+        BARF: Bundle-Adjusting Neural Radiance Fields
+        epoch_start, epoch_end: linearly scale alpha between [0, N_freqs]
+        """
+        super().__init__(max_logscale, N_freqs, logscale)
+        self.N_freqs = N_freqs
+        self.epoch_start = epoch_start
+        self.epoch_end = epoch_end
+
+    def barf_weight(self, freq, epoch):
+        alpha = 0
+        if self.epoch_start < epoch <= self.epoch_end:
+            alpha = self.N_freqs / epoch
+        elif epoch > self.epoch_end:
+            alpha = self.N_freqs
+
+        if alpha < freq:
+            return 0
+        if 0 <= alpha - freq < 1:
+            return (1-torch.cos((alpha-freq)*pi))/2
+        else:  # if alpha - freq >= 1
+            return 1
+
+    def forward(self, x, epoch):
+        """
+        Inputs:
+            x: (B, 3)
+            alpha: optimization progress [0, N_freqs]
+
+        Outputs:
+            out: (B, 6*N_freqs+3)
+        """
+
+        out = [x]
+        for freq in self.freqs:
+            w = self.barf_weight(freq, epoch)
+            for func in self.funcs:
+                out += [w*func(freq*x)]
+
+        return torch.cat(out, -1)
+
+
 class NeRF(nn.Module):
     def __init__(self, typ,
                  D=8, W=256, skips=[4],
                  in_channels_xyz=63, in_channels_dir=27,
                  encode_appearance=False, in_channels_a=48,
                  encode_transient=False, in_channels_t=16,
-                 beta_min=0.03):
+                 beta_min=0.03, refine_pose=False):
         """
         ---Parameters for the original NeRF---
         D: number of layers for density (sigma) encoder
@@ -53,6 +100,8 @@ class NeRF(nn.Module):
         encode_transient: whether to add transient encoding as input (NeRF-U)
         in_channels_t: transient embedding dimension. n^(tau) in the paper
         beta_min: minimum pixel color variance
+
+        refine_pose: BARF, optimize camera poses
         """
         super().__init__()
         self.typ = typ
@@ -62,6 +111,7 @@ class NeRF(nn.Module):
         self.in_channels_xyz = in_channels_xyz
         self.in_channels_dir = in_channels_dir
 
+        self.refine_pose = refine_pose
         self.encode_appearance = False if typ=='coarse' else encode_appearance
         self.in_channels_a = in_channels_a if encode_appearance else 0
         self.encode_transient = False if typ=='coarse' else encode_transient

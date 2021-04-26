@@ -52,6 +52,10 @@ def get_opts():
     parser.add_argument('--beta_min', type=float, default=0.1,
                         help='minimum color variance for each ray')
 
+    # Bundle-Adjusting Neural Radiance Fields
+    parser.add_argument('--refine_pose', default=False, action="store_true",
+                        help='whether to refine input camera poses (BARF)')
+
     parser.add_argument('--batch_size', type=int, default=1024,
                         help='batch size')
     parser.add_argument('--chunk', type=int, default=32*1024,
