@@ -179,6 +179,21 @@ if __name__ == "__main__":
                 dataset.poses_test[i, 0, 3] += dx[i]
                 dataset.poses_test[i, 1, 3] += dy[i]
                 dataset.poses_test[i, 2, 3] += dz[i]
+        elif scene == 'nepszinhaz':
+            dataset.test_appearance_idx = 69  # 85572957_6053497857.jpg
+            N_frames = 30 * 4
+
+            start_pos = dataset.poses_dict[7]
+            end_pos = dataset.poses_dict[68]
+            dx = np.linspace(start_pos[0, 3], end_pos[0, 3], N_frames)
+            dy = np.linspace(start_pos[1, 3], end_pos[1, 3], N_frames)
+            dz = np.linspace(start_pos[2, 3], end_pos[2, 3], N_frames)
+            # define poses
+            dataset.poses_test = np.tile(start_pos, (N_frames, 1, 1))
+            for i in range(N_frames):
+                dataset.poses_test[i, 0, 3] = dx[i]
+                dataset.poses_test[i, 1, 3] = dy[i]
+                dataset.poses_test[i, 2, 3] = dz[i]
         else:
             raise NotImplementedError
         kwargs['output_transient'] = False
