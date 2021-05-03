@@ -1,4 +1,7 @@
 import os
+
+from datasets.ray_utils import get_rays
+from models.poses import LearnPose
 from opt import get_opts
 import torch
 from collections import defaultdict
@@ -23,6 +26,8 @@ from metrics import *
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.loggers import TestTubeLogger
+
+from utils.lie_group_helper import convert3x4_4x4
 
 
 class NeRFSystem(LightningModule):
@@ -78,14 +83,23 @@ class NeRFSystem(LightningModule):
     def forward(self, rays, ts):
         """Do batched inference on rays using chunk."""
         kwargs = {'current_epoch': self.current_epoch}
+        poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}
 
         B = rays.shape[0]
         results = defaultdict(list)
         for i in range(0, B, self.hparams.chunk):
+
+            ray_chunk = rays[i:i+self.hparams.chunk]
+            image_ids = ts[i:i + self.hparams.chunk]
+
+            c2ws = torch.stack([poses[int(img_id)] for img_id in image_ids])[:,:3]
+            rays_o, rays_d = get_rays(ray_chunk[:, :3], c2ws)
+            # reassemble ray data struct
+            rays = torch.cat([rays_o, rays_d, ray_chunk[:, 3:]], 1)
             rendered_ray_chunks = \
                 render_rays(self.models,
                             self.embeddings,
-                            rays[i:i+self.hparams.chunk],
+                            rays,
                             ts[i:i+self.hparams.chunk],
                             self.hparams.N_samples,
                             self.hparams.use_disp,
@@ -116,6 +130,11 @@ class NeRFSystem(LightningModule):
             kwargs['perturbation'] = self.hparams.data_perturb
         self.train_dataset = dataset(split='train', **kwargs)
         self.val_dataset = dataset(split='val', **kwargs)
+
+        c2ws = convert3x4_4x4(torch.from_numpy(self.train_dataset.poses))
+        self.learn_poses = LearnPose(len(self.train_dataset.Ks.keys()), hparams.refine_pose, hparams.refine_pose, init_c2w=c2ws.float())
+        self.models_to_train += [self.learn_poses]
+
 
     def configure_optimizers(self):
         self.optimizer = get_optimizer(self.hparams, self.models_to_train)
