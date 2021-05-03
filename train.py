@@ -95,11 +95,11 @@ class NeRFSystem(LightningModule):
             c2ws = torch.stack([poses[int(img_id)] for img_id in image_ids])[:,:3]
             rays_o, rays_d = get_rays(ray_chunk[:, :3], c2ws)
             # reassemble ray data struct
-            rays = torch.cat([rays_o, rays_d, ray_chunk[:, 3:]], 1)
+            rays_ = torch.cat([rays_o, rays_d, ray_chunk[:, 3:]], 1)
             rendered_ray_chunks = \
                 render_rays(self.models,
                             self.embeddings,
-                            rays,
+                            rays_,
                             ts[i:i+self.hparams.chunk],
                             self.hparams.N_samples,
                             self.hparams.use_disp,
