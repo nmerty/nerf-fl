@@ -88,7 +88,8 @@ class NeRFSystem(LightningModule):
     def configure_optimizers(self):
         self.optimizer = get_optimizer(self.hparams, self.models)
         scheduler = get_scheduler(self.hparams, self.optimizer)
-        return [self.optimizer], [scheduler]
+        return {'optimizer': self.optimizer,
+                'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}}
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,

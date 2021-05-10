@@ -60,9 +60,9 @@ def get_opts():
                         help='Gradually warm-up(increasing) learning rate in optimizer')
     ###########################
     #### params for steplr ####
-    parser.add_argument('--decay_step', nargs='+', type=int, default=[20],
+    parser.add_argument('--decay_step', nargs='+', type=int, default=list(range(0,10000,10)),
                         help='scheduler decay step')
-    parser.add_argument('--decay_gamma', type=float, default=0.1,
+    parser.add_argument('--decay_gamma', type=float, default=0.9954,
                         help='learning rate decay amount')
     ###########################
     #### params for poly ####
