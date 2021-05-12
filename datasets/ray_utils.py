@@ -29,20 +29,21 @@ def get_rays(directions, c2w):
     Get ray origin and normalized directions in world coordinate for all pixels in one image.
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
                ray-tracing-generating-camera-rays/standard-coordinate-systems
-
     Inputs:
-        directions: (H, W, 3) precomputed ray directions in camera coordinate
-        c2w: (3, 4) transformation matrix from camera coordinate to world coordinate
-
+        directions: (B, 3) precomputed ray directions in camera coordinate
+        c2w: (B, 3, 4) transformation matrix from camera coordinate to world coordinate
     Outputs:
         rays_o: (H*W, 3), the origin of the rays in world coordinate
         rays_d: (H*W, 3), the normalized direction of the rays in world coordinate
     """
     # Rotate ray directions from camera coordinate to the world coordinate
-    rays_d = directions @ c2w[:, :3].T # (H, W, 3)
+    if len(c2w.shape) < 3:
+        c2w = torch.unsqueeze(c2w, 0)
+    rays_d = directions.view(-1,1,1,3) @ torch.transpose(c2w[..., :3], 1, 2).view(-1,1,3,3) # (H, W, 3)
+    rays_d = rays_d.view(-1,3)
     rays_d = rays_d / torch.norm(rays_d, dim=-1, keepdim=True)
     # The origin of all rays is the camera origin in world coordinate
-    rays_o = c2w[:, 3].expand(rays_d.shape) # (H, W, 3)
+    rays_o = c2w[:,:, 3].expand(rays_d.shape) # (H, W, 3)
 
     rays_d = rays_d.view(-1, 3)
     rays_o = rays_o.view(-1, 3)

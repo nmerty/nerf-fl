@@ -1,4 +1,7 @@
 import os
+
+from datasets.ray_utils import get_rays, get_ndc_rays
+from models.poses import LearnPose
 from opt import get_opts
 import torch
 from collections import defaultdict
@@ -24,6 +27,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.loggers import TestTubeLogger
 
+from utils.lie_group_helper import convert3x4_4x4
+
 
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
@@ -40,6 +45,7 @@ class NeRFSystem(LightningModule):
         self.nerf_coarse = NeRF(hparams.N_layers, hparams.N_hidden_units, skips=hparams.skip_connections)
         self.models = {'coarse': self.nerf_coarse}
         load_ckpt(self.nerf_coarse, hparams.weight_path, 'nerf_coarse')
+        self.automatic_optimization = False
 
         if hparams.N_importance > 0:
             self.nerf_fine = NeRF(hparams.N_layers, hparams.N_hidden_units, skips=hparams.skip_connections)
@@ -85,11 +91,24 @@ class NeRFSystem(LightningModule):
         self.train_dataset = dataset(split='train', **kwargs)
         self.val_dataset = dataset(split='val', **kwargs)
 
+        c2ws = convert3x4_4x4(torch.from_numpy(self.train_dataset.poses))
+        refine_pose = self.hparams.refine_pose
+        # todo perturb
+        initial_poses = c2ws.float() if not refine_pose or hparams.pose_init == 'original' else None
+        self.learn_poses = LearnPose(len(self.train_dataset.poses_dict.keys()), refine_pose, refine_pose,
+                                     init_c2w=initial_poses)
+        # load_ckpt(self.learn_poses, hparams...)
+
     def configure_optimizers(self):
-        self.optimizer = get_optimizer(self.hparams, self.models)
-        scheduler = get_scheduler(self.hparams, self.optimizer)
-        return {'optimizer': self.optimizer,
-                'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}}
+        optimizer = get_optimizer(self.hparams, self.models)
+        scheduler = get_scheduler(self.hparams, optimizer)
+
+        optimizer_pose = Adam(get_parameters(self.learn_poses), lr=self.hparams.lr_pose, eps=1e-8,
+                                   weight_decay=self.hparams.weight_decay)
+        scheduler_pose = MultiStepLR(optimizer_pose, milestones=self.hparams.decay_step_pose, gamma=self.hparams.decay_gamma_pose)
+
+        return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}},
+                {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose, 'interval': 'step'}},)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
@@ -105,24 +124,48 @@ class NeRFSystem(LightningModule):
                           batch_size=1, # validate one image (H*W rays) at a time
                           pin_memory=True)
     
-    def training_step(self, batch, batch_nb):
-        rays, rgbs = batch['rays'], batch['rgbs']
-        results = self(rays)
+    def training_step(self, batch, batch_nb, optimizer_idx):
+        opt1, opt2 = self.optimizers()
+        opt1.zero_grad()
+        opt2.zero_grad()
+
+        rays, rgbs, ts = batch['rays'], batch['rgbs'], batch['ts']
+
+        poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}
+        c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
+
+        rays_o, rays_d = get_rays(rays[:, :3], c2ws)
+        # todo check whether NDC is needed (frontal unbounded)
+        rays_o, rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
+                                      self.train_dataset.focal, 1.0, rays_o, rays_d)
+        # reassemble ray data struct
+        rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
+        results = self(rays_)
         loss = self.loss(results, rgbs)
 
         with torch.no_grad():
             typ = 'fine' if 'rgb_fine' in results else 'coarse'
             psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
 
-        self.log('lr', get_learning_rate(self.optimizer))
+        self.log('lr', get_learning_rate(opt1))
+        if self.hparams.refine_pose:
+            self.log('lr_pose', get_learning_rate(opt2))
         self.log('train/loss', loss)
         self.log('train/psnr', psnr_, prog_bar=True)
 
+        self.manual_backward(loss)
+        opt1.step()
+        opt2.step()
+
+        # before 1.3 automatically called https://pytorch-lightning.readthedocs.io/en/latest/common/optimizers.html#learning-rate-scheduling-manual
+        # scheduler1, scheduler2 = self.lr_schedulers()
+        # scheduler1.step()
+        # scheduler2.step()
         return loss
 
     def validation_step(self, batch, batch_nb):
         rays, rgbs = batch['rays'], batch['rgbs']
-        rays = rays.squeeze() # (H*W, 3)
+        rays = rays.squeeze() # (H*W, 8)
         rgbs = rgbs.squeeze() # (H*W, 3)
         results = self(rays)
         log = {'val_loss': self.loss(results, rgbs)}
@@ -157,7 +200,7 @@ def main(hparams):
                         filename='{epoch:d}',
                         monitor='val/psnr',
                         mode='max',
-                        save_top_k=5)
+                        save_top_k=-1)
 
     logger = TestTubeLogger(save_dir="logs",
                             name=hparams.exp_name,

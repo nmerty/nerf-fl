@@ -235,10 +235,12 @@ class LLFFDataset(Dataset):
         self.bounds /= scale_factor
         self.poses[..., 3] /= scale_factor
 
+        self.poses_dict = {i: self.poses[i] for i in range(self.poses.shape[0])}
+
         # ray directions for all pixels, same for all images (same H, W, focal)
-        self.directions = \
-            get_ray_directions(self.img_wh[1], self.img_wh[0], self.focal) # (H, W, 3)
-            
+        self.directions = get_ray_directions(self.img_wh[1], self.img_wh[0], self.focal) # (H, W, 3)
+        directions = self.directions.view(-1, 3)
+
         if self.split == 'train': # create buffer of all rays and rgb data
                                   # use first N_images-1 to train, the LAST is val
             self.all_rays = []
@@ -246,8 +248,6 @@ class LLFFDataset(Dataset):
             for i, image_path in enumerate(self.image_paths):
                 if i == val_idx: # exclude the val image
                     continue
-                c2w = torch.FloatTensor(self.poses[i])
-
                 img = Image.open(image_path).convert('RGB')
                 # assert img.size[1]*self.img_wh[0] == img.size[0]*self.img_wh[1], \
                 #     f'''{image_path} has different aspect ratio than img_wh, 
@@ -256,25 +256,23 @@ class LLFFDataset(Dataset):
                 img = self.transform(img) # (3, h, w)
                 img = img.view(3, -1).permute(1, 0) # (h*w, 3) RGB
                 self.all_rgbs += [img]
-                
-                rays_o, rays_d = get_rays(self.directions, c2w) # both (h*w, 3)
                 if not self.spheric_poses:
                     near, far = 0, 1
-                    rays_o, rays_d = get_ndc_rays(self.img_wh[1], self.img_wh[0],
-                                                  self.focal, 1.0, rays_o, rays_d)
-                                     # near plane is always at 1.0
-                                     # near and far in NDC are always 0 and 1
-                                     # See https://github.com/bmild/nerf/issues/34
+                    # near plane is always at 1.0
+                    # near and far in NDC are always 0 and 1
+                    # See https://github.com/bmild/nerf/issues/34
                 else:
                     near = self.bounds.min()
                     far = min(8 * near, self.bounds.max()) # focus on central object only
 
-                self.all_rays += [torch.cat([rays_o, rays_d, 
-                                             near*torch.ones_like(rays_o[:, :1]),
-                                             far*torch.ones_like(rays_o[:, :1])],
-                                             1)] # (h*w, 8)
+                rays_t = i * torch.ones(len(directions), 1)
+                # save direction instead of camera center/dir in world space
+                self.all_rays += [torch.cat([directions,
+                                             near*torch.ones_like(directions[:, :1]),
+                                             far*torch.ones_like(directions[:, :1]),
+                                             rays_t], 1)] # (h*w, 3+1+1+1=6)
                                  
-            self.all_rays = torch.cat(self.all_rays, 0) # ((N_images-1)*h*w, 8)
+            self.all_rays = torch.cat(self.all_rays, 0) # ((N_images-1)*h*w, 6)
             self.all_rgbs = torch.cat(self.all_rgbs, 0) # ((N_images-1)*h*w, 3)
         
         elif self.split == 'val':
@@ -308,7 +306,8 @@ class LLFFDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.split == 'train': # use data in the buffers
-            sample = {'rays': self.all_rays[idx],
+            sample = {'rays': self.all_rays[idx, :-1],
+                      'ts': self.all_rays[idx, -1].long(),
                       'rgbs': self.all_rgbs[idx]}
 
         else:
@@ -328,7 +327,7 @@ class LLFFDataset(Dataset):
                 near = self.bounds.min()
                 far = min(8 * near, self.bounds.max())
 
-            rays = torch.cat([rays_o, rays_d, 
+            rays = torch.cat([rays_o, rays_d,
                               near*torch.ones_like(rays_o[:, :1]),
                               far*torch.ones_like(rays_o[:, :1])],
                               1) # (h*w, 8)

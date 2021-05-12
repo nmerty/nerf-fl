@@ -37,6 +37,12 @@ def get_opts():
                         help='whether to refine input camera poses')
     parser.add_argument('--pose_init', type=str, choices=['identity', 'perturb', 'original'], default='original',
                         help='How to initialize poses when optimizing for them too')
+    parser.add_argument('--decay_step_pose', nargs='+', type=int, default=list(range(0,370000,3700)),
+                        help='scheduler decay step for pose params')
+    parser.add_argument('--decay_gamma_pose', type=float, default=0.9,
+                        help='learning rate decay amount for pose params')
+    parser.add_argument('--lr_pose', type=float, default=1e-3,
+                        help='learning rate for pose')
 
     parser.add_argument('--batch_size', type=int, default=1024,
                         help='batch size')
@@ -72,8 +78,8 @@ def get_opts():
     parser.add_argument('--warmup_epochs', type=int, default=0,
                         help='Gradually warm-up(increasing) learning rate in optimizer')
     ###########################
-    #### params for steplr ####
-    parser.add_argument('--decay_step', nargs='+', type=int, default=list(range(0,10000,10)),
+    #### params for steplr ####  370k iter = 10k epoch = 12h
+    parser.add_argument('--decay_step', nargs='+', type=int, default=list(range(0,370000,370)),
                         help='scheduler decay step')
     parser.add_argument('--decay_gamma', type=float, default=0.9954,
                         help='learning rate decay amount')
