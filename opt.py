@@ -18,6 +18,13 @@ def get_opts():
                         help='number of coarse samples')
     parser.add_argument('--N_importance', type=int, default=128,
                         help='number of additional fine samples')
+    parser.add_argument('--N_hidden_units', type=int, default=256,
+                        help='number of hidden units in each layer')
+    parser.add_argument('--N_layers', type=int, default=8,
+                        help='number of layers')
+    parser.add_argument('--skip_connections',  nargs='+', type=int, default=[4],
+                        help='skip connections for pose embedding')
+
     parser.add_argument('--use_disp', default=False, action="store_true",
                         help='use disparity depth sampling')
     parser.add_argument('--perturb', type=float, default=1.0,
