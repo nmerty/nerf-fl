@@ -24,7 +24,13 @@ def get_opts():
                         help='factor to perturb depth sampling points')
     parser.add_argument('--noise_std', type=float, default=1.0,
                         help='std dev of noise added to regularize sigma')
-        
+
+    # Unknown/inaccurate camera poses
+    parser.add_argument('--refine_pose', default=False, action="store_true",
+                        help='whether to refine input camera poses')
+    parser.add_argument('--pose_init', type=str, choices=['identity', 'perturb', 'original'], default='original',
+                        help='How to initialize poses when optimizing for them too')
+
     parser.add_argument('--batch_size', type=int, default=1024,
                         help='batch size')
     parser.add_argument('--chunk', type=int, default=32*1024,
