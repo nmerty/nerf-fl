@@ -89,6 +89,8 @@ def get_opts():
                         help='exponent for polynomial learning rate decay')
     ###########################
 
+    parser.add_argument('--save_path', type=str, default='./',
+                        help='paths to save checkpoints and logs to')
     parser.add_argument('--exp_name', type=str, default='exp',
                         help='experiment name')
 
