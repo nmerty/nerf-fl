@@ -135,9 +135,9 @@ class NeRFSystem(LightningModule):
         c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
 
         rays_o, rays_d = get_rays(rays[:, :3], c2ws)
-        # todo check whether NDC is needed (frontal unbounded)
-        rays_o, rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
-                                      self.train_dataset.focal, 1.0, rays_o, rays_d)
+        if self.hparams.dataset_name == 'llff':
+            rays_o, rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
+                                          self.train_dataset.focal, 1.0, rays_o, rays_d)
         # reassemble ray data struct
         rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
         results = self(rays_)
