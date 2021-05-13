@@ -43,7 +43,7 @@ class BlenderDataset(Dataset):
             self.poses = []
             self.all_rays = []
             self.all_rgbs = []
-            for frame in self.meta['frames']:
+            for i, frame in enumerate(self.meta['frames']):
                 pose = np.array(frame['transform_matrix'])[:3, :4]
                 self.poses += [pose]
 
@@ -55,14 +55,16 @@ class BlenderDataset(Dataset):
                 img = img.view(4, -1).permute(1, 0) # (h*w, 4) RGBA
                 img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
                 self.all_rgbs += [img]
-                rays_t = frame * torch.ones(len(directions), 1)
+                rays_t = i * torch.ones(len(directions), 1)
 
                 self.all_rays += [torch.cat([directions,
                                              self.near*torch.ones_like(directions[:, :1]),
                                              self.far*torch.ones_like(directions[:, :1]),
                                              rays_t],
                                              1)] # (h*w, 6)
-            self.poses_dict = {i: pose for i, pose in enumerate(self.poses)}
+
+            self.poses = np.stack(self.poses)
+            self.poses_dict = {i: self.poses[i] for i in range(self.poses.shape[0])}
 
             self.all_rays = torch.cat(self.all_rays, 0) # (len(self.meta['frames])*h*w, 3)
             self.all_rgbs = torch.cat(self.all_rgbs, 0) # (len(self.meta['frames])*h*w, 3)
