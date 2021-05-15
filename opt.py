@@ -37,6 +37,9 @@ def get_opts():
                         help='whether to refine input camera poses')
     parser.add_argument('--pose_init', type=str, choices=['identity', 'perturb', 'original'], default='original',
                         help='How to initialize poses when optimizing for them too')
+    parser.add_argument('--pose_sigma', type=float, default=0,
+                        help='Perturb initial pose by additive noise sampled from normal dist with this sigma')
+
     parser.add_argument('--decay_step_pose', nargs='+', type=int, default=list(range(0,370000,3700)),
                         help='scheduler decay step for pose params')
     parser.add_argument('--decay_gamma_pose', type=float, default=0.9,

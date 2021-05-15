@@ -3,11 +3,11 @@ MIT License https://github.com/ActiveVisionLab/nerfmm/blob/main/models/poses.py
 """
 import torch
 import torch.nn as nn
-from utils.lie_group_helper import make_c2w
+from utils.lie_group_helper import make_c2w, convert3x4_4x4
 
 
 class LearnPose(nn.Module):
-    def __init__(self, num_cams, learn_R, learn_t, init_c2w=None):
+    def __init__(self, num_cams, learn_R, learn_t, init_c2w=None, perturb_sigma=0):
         """
         :param num_cams:
         :param learn_R:  True/False
@@ -20,6 +20,8 @@ class LearnPose(nn.Module):
         if init_c2w is not None:
             self.init_c2w = nn.Parameter(init_c2w, requires_grad=False)
 
+        self.perturbation = nn.Parameter(convert3x4_4x4(torch.normal(0, perturb_sigma, [num_cams, 3, 4])), requires_grad=False) if perturb_sigma > 0 else None
+
         self.r = nn.Parameter(torch.zeros(size=(num_cams, 3), dtype=torch.float32), requires_grad=learn_R)  # (N, 3)
         self.t = nn.Parameter(torch.zeros(size=(num_cams, 3), dtype=torch.float32), requires_grad=learn_t)  # (N, 3)
 
@@ -31,5 +33,8 @@ class LearnPose(nn.Module):
         # learn a delta pose between init pose and target pose, if a init pose is provided
         if self.init_c2w is not None:
             c2w = c2w @ self.init_c2w[cam_id]
+
+        if self.perturbation is not None:
+            return c2w + self.perturbation[cam_id]
 
         return c2w
