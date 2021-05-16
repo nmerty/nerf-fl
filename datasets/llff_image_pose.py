@@ -68,7 +68,7 @@ class LLFFImagePose(Dataset):
         self.poses[..., 3] /= scale_factor
 
     def __getitem__(self, idx):
-        if self.split == "train":  # create buffer of all rays and rgb data
+        if self.split == "train":
             # use first N_images-1 to train, the LAST is val
             image_path = self.image_paths[idx]
             # if i == val_idx:  # exclude the val image
@@ -84,5 +84,11 @@ class LLFFImagePose(Dataset):
             img = self.transform(img)  # (3, h, w)
             sample = {"img": img, "c2w": c2w}
             return sample
+        else:
+            raise ValueError(f"Unsupported split: {self.split}")
+
+    def __len__(self):
+        if self.split == "train":
+            return len(self.poses)
         else:
             raise ValueError(f"Unsupported split: {self.split}")
