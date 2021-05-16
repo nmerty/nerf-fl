@@ -197,6 +197,10 @@ class NeRFSystem(LightningModule):
 
 
 def main(hparams):
+    max_iter = hparams.N_images * hparams.num_epochs
+    hparams.decay_step = list(range(0, max_iter, hparams.N_images))
+    hparams.decay_step_pose = list(range(0, max_iter, hparams.N_images))
+
     system = NeRFSystem(hparams)
     checkpoint_callback = \
         ModelCheckpoint(dirpath=os.path.join(hparams.save_path, 'ckpts', hparams.exp_name),
@@ -211,8 +215,7 @@ def main(hparams):
                             create_git_tag=False,
                             log_graph=False)
 
-    N_img = hparams.N_images #get_num_images(hparams)
-    trainer = Trainer(max_steps=hparams.num_epochs * N_img,
+    trainer = Trainer(max_steps=max_iter,
                       checkpoint_callback=True,
                       callbacks=[checkpoint_callback],
                       resume_from_checkpoint=hparams.ckpt_path,
