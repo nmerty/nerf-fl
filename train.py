@@ -198,8 +198,10 @@ class NeRFSystem(LightningModule):
 
 def main(hparams):
     max_iter = hparams.N_images * hparams.num_epochs
-    hparams.decay_step = list(range(0, max_iter, hparams.N_images))
-    hparams.decay_step_pose = list(range(0, max_iter, hparams.N_images))
+
+    every_n_epoch = hparams.N_images  # change lr every n epochs
+    hparams.decay_step = list(range(0, max_iter, every_n_epoch))
+    hparams.decay_step_pose = list(range(0, max_iter, every_n_epoch))
 
     system = NeRFSystem(hparams)
     checkpoint_callback = \
