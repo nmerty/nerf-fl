@@ -46,9 +46,9 @@ def get_opts():
     parser.add_argument('--pose_sigma', type=float, default=0,
                         help='Perturb initial pose by additive noise sampled from normal dist with this sigma')
     # BARF https://arxiv.org/pdf/2104.06405.pdf
-    parser.add_argument('--barf_start', type=int, default=400,
+    parser.add_argument('--barf_start', type=int, default=-1,
                         help='Set alpha between start and end for pos encoding')
-    parser.add_argument('--barf_end', type=int, default=800,
+    parser.add_argument('--barf_end', type=int, default=-1,
                         help='Set alpha between start and end for pos encoding')
 
     parser.add_argument('--decay_step_pose', nargs='+', type=int, default=list(range(0,370000,3700)),
@@ -92,7 +92,7 @@ def get_opts():
     parser.add_argument('--warmup_epochs', type=int, default=0,
                         help='Gradually warm-up(increasing) learning rate in optimizer')
     ###########################
-    #### params for steplr ####  370k iter = 10k epoch = 12h
+    #### params for steplr ####
     parser.add_argument('--decay_step', nargs='+', type=int, default=list(range(0,370000,370)),
                         help='scheduler decay step')
     parser.add_argument('--decay_gamma', type=float, default=0.9954,
