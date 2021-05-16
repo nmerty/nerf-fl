@@ -172,6 +172,7 @@ class NeRFSystem(LightningModule):
             ax.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
             ax.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
             ax.legend()
+            ax.set_title(f"Epoch: {self.global_step//hparams.N_images}")
             self.logger.experiment.add_figure('val/path', fig, self.global_step)
 
         self.manual_backward(loss)
