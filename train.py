@@ -97,7 +97,7 @@ class NeRFSystem(LightningModule):
         c2ws = convert3x4_4x4(torch.from_numpy(self.train_dataset.poses))
         refine_pose = self.hparams.refine_pose
 
-        initial_poses = c2ws.float() if not refine_pose or hparams.pose_init == 'original' else None
+        initial_poses = c2ws.float() if not refine_pose or hparams.pose_init in ['original', 'perturb'] else None
         self.learn_poses = LearnPose(len(self.train_dataset.poses_dict.keys()), refine_pose, refine_pose,
                                      init_c2w=initial_poses, perturb_sigma=self.hparams.pose_sigma)#.to(self.device)
         # load_ckpt(self.learn_poses, hparams...)
