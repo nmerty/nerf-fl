@@ -167,9 +167,10 @@ class NeRFSystem(LightningModule):
 
             fig = plt.figure()
             ax = fig.add_subplot(111, projection='3d')
-            ax.axes.set_xlim3d(left=-5, right=5)
-            ax.axes.set_ylim3d(bottom=-5, top=5)
-            ax.axes.set_zlim3d(bottom=0, top=5)
+            bounds = 1 if self.hparams.dataset_name == 'llff' else 5
+            ax.axes.set_xlim3d(left=-bounds, right=bounds)
+            ax.axes.set_ylim3d(bottom=-bounds, top=bounds)
+            ax.axes.set_zlim3d(bottom=0, top=bounds)
             ax.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
             ax.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
             ax.legend()
