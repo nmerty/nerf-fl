@@ -28,7 +28,7 @@ from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.loggers import TestTubeLogger
 
 from utils.lie_group_helper import convert3x4_4x4
-
+import matplotlib.pyplot as plt
 
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
@@ -134,6 +134,8 @@ class NeRFSystem(LightningModule):
 
         rays, rgbs, ts = batch['rays'], batch['rgbs'], batch['ts']
 
+        self.learn_poses.train()
+
         poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}
         c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
 
@@ -155,6 +157,22 @@ class NeRFSystem(LightningModule):
             self.log('lr_pose', get_learning_rate(opt2))
         self.log('train/loss', loss)
         self.log('train/psnr', psnr_, prog_bar=True)
+
+        if self.global_step % hparams.N_images == 0:
+            self.learn_poses.eval()
+
+            poses = np.array([self.learn_poses(i).cpu().detach().numpy() for i, img_id in enumerate(self.train_dataset.poses_dict.keys())])
+            gt = np.array(list(self.train_dataset.poses_dict.values()))
+
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            ax.axes.set_xlim3d(left=-5, right=5)
+            ax.axes.set_ylim3d(bottom=-5, top=5)
+            ax.axes.set_zlim3d(bottom=0, top=5)
+            ax.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
+            ax.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
+            ax.legend()
+            self.logger.experiment.add_figure('val/path', fig, self.global_step)
 
         self.manual_backward(loss)
         opt1.step()
