@@ -1,8 +1,11 @@
 import torch
 from torch import nn
 
+pi = torch.acos(torch.zeros(1)).item() * 2 # which is 3.1415927410125732
+
+
 class Embedding(nn.Module):
-    def __init__(self, in_channels, N_freqs, logscale=True):
+    def __init__(self, in_channels, N_freqs, logscale=True, epoch_start=-1, epoch_end=-1):
         """
         Defines a function that embeds x to (x, sin(2^k x), cos(2^k x), ...)
         in_channels: number of input channels (3 for both xyz and direction)
@@ -13,12 +16,31 @@ class Embedding(nn.Module):
         self.funcs = [torch.sin, torch.cos]
         self.out_channels = in_channels*(len(self.funcs)*N_freqs+1)
 
+        self.epoch_start = epoch_start
+        self.epoch_end = epoch_end
         if logscale:
             self.freq_bands = 2**torch.linspace(0, N_freqs-1, N_freqs)
         else:
             self.freq_bands = torch.linspace(1, 2**(N_freqs-1), N_freqs)
 
-    def forward(self, x):
+    def barf_weight(self, freq, epoch):
+        if self.epoch_start < 0 or self.epoch_end < 0:
+            return 1
+
+        alpha = 0
+        if self.epoch_start < epoch <= self.epoch_end:
+            alpha = self.N_freqs / epoch
+        elif epoch > self.epoch_end:
+            alpha = self.N_freqs
+
+        if alpha < freq:
+            return 0
+        if 0 <= alpha - freq < 1:
+            return (1 - torch.cos((alpha - freq) * pi)) / 2
+        else:  # if alpha - freq >= 1
+            return 1
+
+    def forward(self, x, current_epoch):
         """
         Embeds x to (x, sin(2^k x), cos(2^k x), ...) 
         Different from the paper, "x" is also in the output
@@ -32,8 +54,9 @@ class Embedding(nn.Module):
         """
         out = [x]
         for freq in self.freq_bands:
+            w = self.barf_weight(freq, current_epoch)
             for func in self.funcs:
-                out += [func(freq*x)]
+                out += [w * func(freq*x)]
 
         return torch.cat(out, -1)
 

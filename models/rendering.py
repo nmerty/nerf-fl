@@ -78,6 +78,7 @@ def render_rays(models,
     Outputs:
         result: dictionary containing final rgb and depth maps for coarse and fine models
     """
+    current_epoch = kwargs.get('current_epoch')
 
     def inference(results, model, typ, xyz, z_vals, test_time=False, **kwargs):
         """
@@ -108,7 +109,7 @@ def render_rays(models,
         out_chunks = []
         if typ=='coarse' and test_time and 'fine' in models:
             for i in range(0, B, chunk):
-                xyz_embedded = embedding_xyz(xyz_[i:i+chunk])
+                xyz_embedded = embedding_xyz(xyz_[i:i+chunk], current_epoch)
                 out_chunks += [model(xyz_embedded, sigma_only=True)]
 
             out = torch.cat(out_chunks, 0)
@@ -117,7 +118,7 @@ def render_rays(models,
             dir_embedded_ = repeat(dir_embedded, 'n1 c -> (n1 n2) c', n2=N_samples_)
                             # (N_rays*N_samples_, embed_dir_channels)
             for i in range(0, B, chunk):
-                xyz_embedded = embedding_xyz(xyz_[i:i+chunk])
+                xyz_embedded = embedding_xyz(xyz_[i:i+chunk], current_epoch)
                 xyzdir_embedded = torch.cat([xyz_embedded,
                                              dir_embedded_[i:i+chunk]], 1)
                 out_chunks += [model(xyzdir_embedded, sigma_only=False)]
@@ -168,7 +169,7 @@ def render_rays(models,
     rays_o, rays_d = rays[:, 0:3], rays[:, 3:6] # both (N_rays, 3)
     near, far = rays[:, 6:7], rays[:, 7:8] # both (N_rays, 1)
     # Embed direction
-    dir_embedded = embedding_dir(kwargs.get('view_dir', rays_d)) # (N_rays, embed_dir_channels)
+    dir_embedded = embedding_dir(kwargs.get('view_dir', rays_d), current_epoch) # (N_rays, embed_dir_channels)
 
     rays_o = rearrange(rays_o, 'n1 c -> n1 1 c')
     rays_d = rearrange(rays_d, 'n1 c -> n1 1 c')

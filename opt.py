@@ -6,6 +6,8 @@ def get_opts():
     parser.add_argument('--root_dir', type=str,
                         default='/home/ubuntu/data/nerf_example_data/nerf_synthetic/lego',
                         help='root directory of dataset')
+    parser.add_argument('--N_images', type=int,
+                        help='Number of images in dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
                         choices=['blender', 'llff'],
                         help='which dataset to train/val')
@@ -14,6 +16,10 @@ def get_opts():
     parser.add_argument('--spheric_poses', default=False, action="store_true",
                         help='whether images are taken in spheric poses (for llff)')
 
+    parser.add_argument('--N_emb_xyz', type=int, default=10,
+                        help='number of xyz embedding frequencies')
+    parser.add_argument('--N_emb_dir', type=int, default=4,
+                        help='number of direction embedding frequencies')
     parser.add_argument('--N_samples', type=int, default=64,
                         help='number of coarse samples')
     parser.add_argument('--N_importance', type=int, default=128,
@@ -39,6 +45,11 @@ def get_opts():
                         help='How to initialize poses when optimizing for them too')
     parser.add_argument('--pose_sigma', type=float, default=0,
                         help='Perturb initial pose by additive noise sampled from normal dist with this sigma')
+    # BARF https://arxiv.org/pdf/2104.06405.pdf
+    parser.add_argument('--barf_start', type=int, default=400,
+                        help='Set alpha between start and end for pos encoding')
+    parser.add_argument('--barf_end', type=int, default=800,
+                        help='Set alpha between start and end for pos encoding')
 
     parser.add_argument('--decay_step_pose', nargs='+', type=int, default=list(range(0,370000,3700)),
                         help='scheduler decay step for pose params')
@@ -51,7 +62,7 @@ def get_opts():
                         help='batch size')
     parser.add_argument('--chunk', type=int, default=32*1024,
                         help='chunk size to split the input to avoid OOM')
-    parser.add_argument('--num_epochs', type=int, default=16,
+    parser.add_argument('--num_epochs', type=int, default=10000,
                         help='number of training epochs')
     parser.add_argument('--num_gpus', type=int, default=1,
                         help='number of gpus')

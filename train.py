@@ -37,8 +37,8 @@ class NeRFSystem(LightningModule):
 
         self.loss = loss_dict['color'](coef=1)
 
-        self.embedding_xyz = Embedding(3, 10)
-        self.embedding_dir = Embedding(3, 4)
+        self.embedding_xyz = Embedding(3, hparams.N_emb_xyz, epoch_start=hparams.barf_start, epoch_end=hparams.barf_end)
+        self.embedding_dir = Embedding(3, hparams.N_emb_dir)
         self.embeddings = {'xyz': self.embedding_xyz,
                            'dir': self.embedding_dir}
 
@@ -59,6 +59,7 @@ class NeRFSystem(LightningModule):
 
     def forward(self, rays):
         """Do batched inference on rays using chunk."""
+        kwargs = {'current_epoch': self.global_step // self.hparams.N_images}
         B = rays.shape[0]
         results = defaultdict(list)
         for i in range(0, B, self.hparams.chunk):
@@ -72,7 +73,8 @@ class NeRFSystem(LightningModule):
                             self.hparams.noise_std,
                             self.hparams.N_importance,
                             self.hparams.chunk, # chunk size is effective in val mode
-                            self.train_dataset.white_back)
+                            self.train_dataset.white_back,
+                            **kwargs)
 
             for k, v in rendered_ray_chunks.items():
                 results[k] += [v]
@@ -91,9 +93,10 @@ class NeRFSystem(LightningModule):
         self.train_dataset = dataset(split='train', **kwargs)
         self.val_dataset = dataset(split='val', **kwargs)
 
+        assert len(self.train_dataset.poses_dict.keys()) == hparams.N_images, "Number of images in args must be equal to images in dataloader"
         c2ws = convert3x4_4x4(torch.from_numpy(self.train_dataset.poses))
         refine_pose = self.hparams.refine_pose
-        # todo perturb
+
         initial_poses = c2ws.float() if not refine_pose or hparams.pose_init == 'original' else None
         self.learn_poses = LearnPose(len(self.train_dataset.poses_dict.keys()), refine_pose, refine_pose,
                                      init_c2w=initial_poses, perturb_sigma=self.hparams.pose_sigma)#.to(self.device)
@@ -208,7 +211,8 @@ def main(hparams):
                             create_git_tag=False,
                             log_graph=False)
 
-    trainer = Trainer(max_epochs=hparams.num_epochs,
+    N_img = hparams.N_images #get_num_images(hparams)
+    trainer = Trainer(max_steps=hparams.num_epochs * N_img,
                       checkpoint_callback=True,
                       callbacks=[checkpoint_callback],
                       resume_from_checkpoint=hparams.ckpt_path,
