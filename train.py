@@ -93,7 +93,8 @@ class NeRFSystem(LightningModule):
         self.train_dataset = dataset(split='train', **kwargs)
         self.val_dataset = dataset(split='val', **kwargs)
 
-        assert len(self.train_dataset.poses_dict.keys()) == hparams.N_images, "Number of images in args must be equal to images in dataloader"
+        N_images = len(self.train_dataset.poses_dict.keys())
+        assert N_images == hparams.N_images, f"Set number of images in args to {N_images}"
         c2ws = convert3x4_4x4(torch.from_numpy(self.train_dataset.poses))
         refine_pose = self.hparams.refine_pose
 
