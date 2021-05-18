@@ -24,11 +24,26 @@ from metrics import *
 
 # pytorch-lightning
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning import LightningModule, Trainer
+from pytorch_lightning import LightningModule, Trainer, seed_everything
 from pytorch_lightning.loggers import TestTubeLogger
 
 from utils.lie_group_helper import convert3x4_4x4
 import matplotlib.pyplot as plt
+
+
+def save_pose_plot(poses, gt, current_epoch, dataset_name):
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    bounds = 1 if dataset_name == 'llff' else 5
+    ax.axes.set_xlim3d(left=-bounds, right=bounds)
+    ax.axes.set_ylim3d(bottom=-bounds, top=bounds)
+    ax.axes.set_zlim3d(bottom=0, top=bounds)
+    ax.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
+    ax.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
+    ax.legend()
+    ax.set_title(f"Epoch: {current_epoch}")
+    return fig, ax
+
 
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
@@ -159,24 +174,6 @@ class NeRFSystem(LightningModule):
         self.log('train/loss', loss)
         self.log('train/psnr', psnr_, prog_bar=True)
 
-        if self.global_step % hparams.N_images == 0:
-            self.learn_poses.eval()
-
-            poses = np.array([self.learn_poses(i).cpu().detach().numpy() for i, img_id in enumerate(self.train_dataset.poses_dict.keys())])
-            gt = np.array(list(self.train_dataset.poses_dict.values()))
-
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-            bounds = 1 if self.hparams.dataset_name == 'llff' else 5
-            ax.axes.set_xlim3d(left=-bounds, right=bounds)
-            ax.axes.set_ylim3d(bottom=-bounds, top=bounds)
-            ax.axes.set_zlim3d(bottom=0, top=bounds)
-            ax.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
-            ax.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
-            ax.legend()
-            ax.set_title(f"Epoch: {self.global_step//hparams.N_images}")
-            self.logger.experiment.add_figure('val/path', fig, self.global_step)
-
         self.manual_backward(loss)
         opt1.step()
         opt2.step()
@@ -201,28 +198,44 @@ class NeRFSystem(LightningModule):
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
-            self.logger.experiment.add_images('val/GT_pred_depth',
-                                               stack, self.global_step)
+            self.logger.experiment.add_images('val/GT_pred_depth', stack, self.global_step)
+
+            if self.hparams.refine_pose:
+                self.learn_poses.eval()
+                poses = np.array([self.learn_poses(i).cpu().detach().numpy() for i, img_id in enumerate(self.train_dataset.poses_dict.keys())])
+                gt = np.array(list(self.train_dataset.poses_dict.values()))                                                                   stats_rot_est['mean']))
+
+                fig, ax = save_pose_plot(poses, gt, self.global_step // hparams.N_images, self.hparams.dataset_name)
+                self.logger.experiment.add_figure('val/path', fig, self.global_step)
+
 
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
         log['val_psnr'] = psnr_
+
+        ssim_ = ssim(results[f'rgb_{typ}'].view(1, *self.hparams.img_wh, 3), rgbs.view(1, *self.hparams.img_wh, 3))
+        log['val_ssim'] = ssim_
 
         return log
 
     def validation_epoch_end(self, outputs):
         mean_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
+        mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
 
         self.log('val/loss', mean_loss)
         self.log('val/psnr', mean_psnr, prog_bar=True)
+        self.log('val/ssim', mean_ssim)
 
 
 def main(hparams):
-    max_iter = hparams.N_images * hparams.num_epochs
+    N_iter_in_epoch = hparams.N_images
+    max_iter = N_iter_in_epoch * hparams.num_epochs
 
-    every_n_epoch = hparams.N_images  # change lr every n epochs
-    hparams.decay_step = list(range(0, max_iter, every_n_epoch))
-    hparams.decay_step_pose = list(range(0, max_iter, every_n_epoch))
+    step_lr_iter = hparams.N_images  # change lr every n steps
+    hparams.decay_step = list(range(0, max_iter, step_lr_iter))
+    hparams.decay_step_pose = list(range(0, max_iter, step_lr_iter))
+
+    seed_everything(42)
 
     system = NeRFSystem(hparams)
     checkpoint_callback = \
@@ -239,6 +252,7 @@ def main(hparams):
                             log_graph=False)
 
     trainer = Trainer(max_steps=max_iter,
+                      val_check_interval=N_iter_in_epoch * 5,
                       checkpoint_callback=True,
                       callbacks=[checkpoint_callback],
                       resume_from_checkpoint=hparams.ckpt_path,
