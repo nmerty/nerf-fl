@@ -203,7 +203,7 @@ class NeRFSystem(LightningModule):
             if self.hparams.refine_pose:
                 self.learn_poses.eval()
                 poses = np.array([self.learn_poses(i).cpu().detach().numpy() for i, img_id in enumerate(self.train_dataset.poses_dict.keys())])
-                gt = np.array(list(self.train_dataset.poses_dict.values()))                                                                   stats_rot_est['mean']))
+                gt = np.array(list(self.train_dataset.poses_dict.values()))
 
                 fig, ax = save_pose_plot(poses, gt, self.global_step // hparams.N_images, self.hparams.dataset_name)
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
