@@ -199,8 +199,8 @@ class NeRFSystem(LightningModule):
 
             if self.hparams.refine_pose:
                 self.learn_poses.eval()
-                poses = np.array([self.learn_poses(i).cpu().detach().numpy() for i, img_id in enumerate(self.train_dataset.poses_dict.keys())])
-                gt = np.array(list(self.train_dataset.poses_dict.values()))
+                poses = torch.stack([self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())])
+                gt = torch.from_numpy(np.array(list(self.train_dataset.poses_dict.values())))
 
                 '''Align est traj to gt traj'''
                 c2ws_est_aligned = align_ate_c2b_use_a2b(poses, gt)  # (N, 4, 4)
@@ -210,7 +210,7 @@ class NeRFSystem(LightningModule):
                 log['val_tr'] = stats_tran_est['mean']
                 log['val_rot'] = stats_rot_est['mean']
 
-                fig, ax = save_pose_plot(c2ws_est_aligned, gt, self.global_step // hparams.N_images, self.hparams.dataset_name)
+                fig, ax = save_pose_plot(c2ws_est_aligned.cpu().numpy(), gt.cpu().numpy(), self.global_step // hparams.N_images, self.hparams.dataset_name)
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
 
             img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
