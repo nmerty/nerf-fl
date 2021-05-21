@@ -27,6 +27,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import LightningModule, Trainer, seed_everything
 from pytorch_lightning.loggers import TestTubeLogger
 
+from utils.align_traj import align_ate_c2b_use_a2b
+from utils.comp_ate import compute_ate
 from utils.lie_group_helper import convert3x4_4x4
 import matplotlib.pyplot as plt
 
@@ -194,20 +196,28 @@ class NeRFSystem(LightningModule):
     
         if batch_nb == 0:
             W, H = self.hparams.img_wh
-            img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
-            img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
-            depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
-            stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
-            self.logger.experiment.add_images('val/GT_pred_depth', stack, self.global_step)
 
             if self.hparams.refine_pose:
                 self.learn_poses.eval()
                 poses = np.array([self.learn_poses(i).cpu().detach().numpy() for i, img_id in enumerate(self.train_dataset.poses_dict.keys())])
                 gt = np.array(list(self.train_dataset.poses_dict.values()))
 
-                fig, ax = save_pose_plot(poses, gt, self.global_step // hparams.N_images, self.hparams.dataset_name)
+                '''Align est traj to gt traj'''
+                c2ws_est_aligned = align_ate_c2b_use_a2b(poses, gt)  # (N, 4, 4)
+
+                # compute ate (absolute trajectory error)
+                stats_tran_est, stats_rot_est, _ = compute_ate(c2ws_est_aligned, gt, align_a2b=None)
+                log['val_tr'] = stats_tran_est['mean']
+                log['val_rot'] = stats_rot_est['mean']
+
+                fig, ax = save_pose_plot(c2ws_est_aligned, gt, self.global_step // hparams.N_images, self.hparams.dataset_name)
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
 
+            img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
+            img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
+            depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
+            stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
+            self.logger.experiment.add_images('val/GT_pred_depth', stack, self.global_step)
 
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
         log['val_psnr'] = psnr_
@@ -221,10 +231,14 @@ class NeRFSystem(LightningModule):
         mean_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
         mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
+        mean_tr = torch.stack([x['val_tr'] for x in outputs]).mean()
+        mean_rot = torch.stack([x['val_rot'] for x in outputs]).mean()
 
         self.log('val/loss', mean_loss)
         self.log('val/psnr', mean_psnr, prog_bar=True)
         self.log('val/ssim', mean_ssim)
+        self.log('val/tr', mean_tr)
+        self.log('val/rot', mean_rot)
 
 
 def main(hparams):
