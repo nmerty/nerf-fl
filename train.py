@@ -235,7 +235,7 @@ def main(hparams):
     hparams.decay_step = list(range(0, max_iter, step_lr_iter))
     hparams.decay_step_pose = list(range(0, max_iter, step_lr_iter))
 
-    seed_everything(42)
+    seed_everything(hparams.random_seed)
 
     system = NeRFSystem(hparams)
     checkpoint_callback = \

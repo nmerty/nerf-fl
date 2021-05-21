@@ -6,7 +6,9 @@ def get_opts():
     parser.add_argument('--root_dir', type=str,
                         default='/home/ubuntu/data/nerf_example_data/nerf_synthetic/lego',
                         help='root directory of dataset')
-    parser.add_argument('--N_images', type=int,
+    parser.add_argument('--random_seed', type=int, default=42,
+                        help='Set random seed everywhere')
+    parser.add_argument('--N_images', type=int, required=True,
                         help='Number of images in dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
                         choices=['blender', 'llff'],
