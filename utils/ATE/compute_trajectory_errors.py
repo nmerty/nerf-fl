@@ -3,8 +3,8 @@
 import os
 import numpy as np
 
-import third_party.ATE.trajectory_utils as tu
-import third_party.ATE.transformations as tf
+import utils.ATE.trajectory_utils as tu
+import utils.ATE.transformations as tf
 
 
 def compute_relative_error(p_es, q_es, p_gt, q_gt, T_cm, dist, max_dist_diff,

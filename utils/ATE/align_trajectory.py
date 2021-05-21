@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import numpy as np
-import third_party.ATE.transformations as tfs
+import utils.ATE.transformations as tfs
 
 
 def get_best_yaw(C):
