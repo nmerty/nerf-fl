@@ -207,8 +207,8 @@ class NeRFSystem(LightningModule):
 
                 # compute ate (absolute trajectory error)
                 stats_tran_est, stats_rot_est, _ = compute_ate(c2ws_est_aligned, gt, align_a2b=None)
-                log['val_tr'] = stats_tran_est['mean']
-                log['val_rot'] = stats_rot_est['mean']
+                log['val_tr'] = torch.tensor(stats_tran_est['mean'])
+                log['val_rot'] = torch.tensor(stats_rot_est['mean'])
 
                 fig, ax = save_pose_plot(c2ws_est_aligned.cpu().numpy(), gt.cpu().numpy(), self.global_step // hparams.N_images, self.hparams.dataset_name)
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
