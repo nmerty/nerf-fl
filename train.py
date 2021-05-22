@@ -33,7 +33,7 @@ from utils.lie_group_helper import convert3x4_4x4
 import matplotlib.pyplot as plt
 
 
-def save_pose_plot(poses, gt, current_epoch, dataset_name):
+def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     bounds = 1 if dataset_name == 'llff' else 5
@@ -42,6 +42,7 @@ def save_pose_plot(poses, gt, current_epoch, dataset_name):
     ax.axes.set_zlim3d(bottom=0, top=bounds)
     ax.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
     ax.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
+    ax.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
     ax.legend()
     ax.set_title(f"Epoch: {current_epoch}")
     return fig, ax
@@ -187,32 +188,50 @@ class NeRFSystem(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_nb):
-        rays, rgbs = batch['rays'], batch['rgbs']
-        rays = rays.squeeze() # (H*W, 8)
+        log = {}
+        rays, rgbs, ts, c2w = batch['rays'], batch['rgbs'], batch['ts'], batch['c2w']
+        rays = rays.squeeze() # (H*W, 6)
         rgbs = rgbs.squeeze() # (H*W, 3)
-        results = self(rays)
-        log = {'val_loss': self.loss(results, rgbs)}
-        typ = 'fine' if 'rgb_fine' in results else 'coarse'
-    
-        if batch_nb == 0:
-            W, H = self.hparams.img_wh
+        ts = ts.squeeze()  # val id
 
-            if self.hparams.refine_pose:
-                self.learn_poses.eval()
-                poses = torch.stack([self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())])
-                gt = torch.from_numpy(np.array(list(self.train_dataset.poses_dict.values())))
+        # todo fix blender
+        self.learn_poses.eval()
+        val_ids = [self.val_dataset.val_idx]  # todo make a list in dataset
+        # todo set 1 step to only 1 image
 
-                '''Align est traj to gt traj'''
+        if self.hparams.refine_pose:
+            poses = torch.stack([self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys()) if img_id not in val_ids])
+            gt = torch.from_numpy(np.array([self.train_dataset.poses_dict[img_id] for img_id in self.train_dataset.poses_dict.keys() if img_id not in val_ids]))
+
+            '''Align est traj to gt traj'''
+            val_pose_aligned = align_ate_c2b_use_a2b(gt, poses, c2w)  # (N, 4, 4) todo gt val pose aligned to pred
+            if batch_nb == 0:
                 c2ws_est_aligned = align_ate_c2b_use_a2b(poses, gt)  # (N, 4, 4)
-
-                # compute ate (absolute trajectory error)
+                # compute ate for training poses (absolute trajectory error)
                 stats_tran_est, stats_rot_est, _ = compute_ate(c2ws_est_aligned, gt, align_a2b=None)
                 log['val_tr'] = torch.tensor(stats_tran_est['mean'])
                 log['val_rot'] = torch.tensor(stats_rot_est['mean'])
 
-                fig, ax = save_pose_plot(c2ws_est_aligned.cpu().numpy(), gt.cpu().numpy(), self.global_step // hparams.N_images, self.hparams.dataset_name)
+                # gt coord system, val pose already there
+                val_poses2plot = np.array([self.train_dataset.poses_dict[img_id] for img_id in val_ids])
+                fig, ax = save_pose_plot(c2ws_est_aligned.cpu(), gt.cpu(), val_poses2plot, self.global_step // hparams.N_images, self.hparams.dataset_name)
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
+        else:
+            val_pose_aligned = c2w
 
+        rays_o, rays_d = get_rays(rays[:, :3], val_pose_aligned[:, :3].to(rays.device))
+        if self.hparams.dataset_name == 'llff':
+            rays_o, rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
+                                          self.train_dataset.focal, 1.0, rays_o, rays_d)
+        # reassemble ray data struct
+        rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
+        results = self(rays_)  # run inference
+        log['val_loss'] = self.loss(results, rgbs)
+        typ = 'fine' if 'rgb_fine' in results else 'coarse'
+
+        # plot validation image
+        if batch_nb == 0:
+            W, H = self.hparams.img_wh
             img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)

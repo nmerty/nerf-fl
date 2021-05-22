@@ -318,22 +318,22 @@ class LLFFDataset(Dataset):
             else:
                 c2w = torch.FloatTensor(self.poses_test[idx])
 
-            rays_o, rays_d = get_rays(self.directions, c2w)
             if not self.spheric_poses:
                 near, far = 0, 1
-                rays_o, rays_d = get_ndc_rays(self.img_wh[1], self.img_wh[0],
-                                              self.focal, 1.0, rays_o, rays_d)
             else:
                 near = self.bounds.min()
                 far = min(8 * near, self.bounds.max())
 
-            rays = torch.cat([rays_o, rays_d,
-                              near*torch.ones_like(rays_o[:, :1]),
-                              far*torch.ones_like(rays_o[:, :1])],
-                              1) # (h*w, 8)
+            directions = self.directions.view(-1, 3)
+            rays = torch.cat([directions,
+                              near*torch.ones_like(directions[:, :1]),
+                              far*torch.ones_like(directions[:, :1])],
+                              1) # (h*w, 6)
 
             sample = {'rays': rays,
-                      'c2w': c2w}
+                      'ts': self.val_idx,
+                      'c2w': c2w
+                      }
 
             if self.split in ['val', 'test_train']:
                 if self.split == 'val':
