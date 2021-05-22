@@ -237,6 +237,20 @@ class NeRFSystem(LightningModule):
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
             self.logger.experiment.add_images('val/GT_pred_depth', stack, self.global_step)
+            """Test gt val pose"""
+            rays_o2, rays_d2 = get_rays(rays[:, :3], c2w.to(rays.device))
+            if self.hparams.dataset_name == 'llff':
+                rays_o2, rays_d2 = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
+                                              self.train_dataset.focal, 1.0, rays_o2, rays_d2)
+            # reassemble ray data struct
+            rays_2 = torch.cat([rays_o2, rays_d2, rays[:, 3:]], 1)
+            results2 = self(rays_2)  # run inference
+            img = results2[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu()  # (3, H, W)
+            img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu()  # (3, H, W)
+            depth = visualize_depth(results2[f'depth_{typ}'].view(H, W))  # (3, H, W)
+            stack = torch.stack([img_gt, img, depth])  # (3, 3, H, W)
+            self.logger.experiment.add_images('val/GT_pred_depth_test', stack, self.global_step)
+            """Test end"""
 
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
         log['val_psnr'] = psnr_
