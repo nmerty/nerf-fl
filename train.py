@@ -39,25 +39,32 @@ def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name):
     ax2 = fig.add_subplot(222, projection='3d')
     ax3 = fig.add_subplot(223, projection='3d')
     ax4 = fig.add_subplot(224, projection='3d')
-    bounds = 1 if dataset_name == 'llff' else 5
+    bounds = 0.5 if dataset_name == 'llff' else 5
+
+    fw = np.array([0,0,-1])
+    rotGT = np.array(gt[:,:3,:3]@fw, dtype=np.float32)
+    rotPose = np.array(poses[:,:3,:3]@fw, dtype=np.float32)
+    rotVal = np.array(val_poses[:,:3,:3]@fw, dtype=np.float32)
+    arrow_length = bounds / 30
+
     ax.axes.set_xlim3d(left=-bounds, right=bounds)
     ax.axes.set_ylim3d(bottom=-bounds, top=bounds)
-    ax.axes.set_zlim3d(bottom=0, top=bounds)
+    ax.axes.set_zlim3d(bottom=-0.15, top=bounds)
     ax.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
     ax.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
     ax.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
     ax.legend()
     ax.set_title(f"Epoch: {current_epoch}")
 
-    ax3.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
-    ax3.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
+    ax2.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:, 0], rotGT[:, 1], rotGT[:, 2], length=arrow_length, normalize=True, colors='k', label='GT')
+    ax2.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:, 0], rotVal[:, 1], rotVal[:, 2], length=arrow_length, normalize=True, colors='b', label='val')
+    ax2.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:, 0], rotPose[:, 1], rotPose[:, 2], length=arrow_length, normalize=True, colors='r', label='pred')
 
-    ax4.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
-    ax4.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
+    ax3.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:,0],rotGT[:,1],rotGT[:,2], length=arrow_length, normalize=True, colors='k', label='GT')
+    ax3.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:,0],rotVal[:,1],rotVal[:,2], length=arrow_length, normalize=True, colors='b', label='val')
 
-    ax2.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
-    ax2.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
-    ax2.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
+    ax4.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:,0],rotPose[:,1],rotPose[:,2], length=arrow_length, normalize=True, colors='r', label='pred')
+    ax4.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:,0],rotVal[:,1],rotVal[:,2], length=arrow_length, normalize=True, colors='b', label='val')
 
     return fig, ax
 
