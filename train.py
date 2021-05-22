@@ -33,39 +33,48 @@ from utils.lie_group_helper import convert3x4_4x4
 import matplotlib.pyplot as plt
 
 
-def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name):
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(231, projection='3d')
-    ax2 = fig.add_subplot(222, projection='3d')
-    ax3 = fig.add_subplot(223, projection='3d')
-    ax4 = fig.add_subplot(224, projection='3d')
+def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name, title=""):
+    fig = plt.figure(figsize=plt.figaspect(2))#
+    fig.suptitle(title)
+
+    ax = fig.add_subplot(211, projection='3d')
+    ax2 = fig.add_subplot(212)
+    # ax3 = fig.add_subplot(223, projection='3d')
+    # ax4 = fig.add_subplot(224, projection='3d')
     bounds = 0.5 if dataset_name == 'llff' else 5
 
     fw = np.array([0,0,-1])
     rotGT = np.array(gt[:,:3,:3]@fw, dtype=np.float32)
     rotPose = np.array(poses[:,:3,:3]@fw, dtype=np.float32)
     rotVal = np.array(val_poses[:,:3,:3]@fw, dtype=np.float32)
-    arrow_length = bounds / 30
+    arrow_length = bounds / 15
 
     ax.axes.set_xlim3d(left=-bounds, right=bounds)
     ax.axes.set_ylim3d(bottom=-bounds, top=bounds)
-    ax.axes.set_zlim3d(bottom=-0.15, top=bounds)
-    ax.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
-    ax.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
-    ax.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
-    ax.legend()
+    # ax.axes.set_zlim3d(bottom=-0.15, top=bounds)
+    ax.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:, 0], rotGT[:, 1], rotGT[:, 2], length=arrow_length, normalize=True, colors='k', label='GT')
+    ax.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:, 0], rotVal[:, 1], rotVal[:, 2], length=arrow_length, normalize=True, colors='b', label='val')
+    ax.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:, 0], rotPose[:, 1], rotPose[:, 2], length=arrow_length, normalize=True, colors='r', label='pred')
     ax.set_title(f"Epoch: {current_epoch}")
 
-    ax2.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:, 0], rotGT[:, 1], rotGT[:, 2], length=arrow_length, normalize=True, colors='k', label='GT')
-    ax2.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:, 0], rotVal[:, 1], rotVal[:, 2], length=arrow_length, normalize=True, colors='b', label='val')
-    ax2.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:, 0], rotPose[:, 1], rotPose[:, 2], length=arrow_length, normalize=True, colors='r', label='pred')
+    ax2.plot(gt[:, 0, 3], gt[:, 1, 3], 'k.', label='GT')
+    ax2.plot(poses[:, 0, 3], poses[:, 1, 3], 'r.', label='pred')
+    ax2.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], 'b.', label='val')
+    ax2.legend()
 
-    ax3.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:,0],rotGT[:,1],rotGT[:,2], length=arrow_length, normalize=True, colors='k', label='GT')
-    ax3.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:,0],rotVal[:,1],rotVal[:,2], length=arrow_length, normalize=True, colors='b', label='val')
+    #
+    # ax2.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:, 0], rotGT[:, 1], rotGT[:, 2], length=arrow_length, normalize=True, colors='k', label='GT')
+    # ax2.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:, 0], rotVal[:, 1], rotVal[:, 2], length=arrow_length, normalize=True, colors='b', label='val')
+    # ax2.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:, 0], rotPose[:, 1], rotPose[:, 2], length=arrow_length, normalize=True, colors='r', label='pred')
+    #
+    # ax3.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:,0],rotGT[:,1],rotGT[:,2], length=arrow_length, normalize=True, colors='k', label='GT')
+    # ax3.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:,0],rotVal[:,1],rotVal[:,2], length=arrow_length, normalize=True, colors='b', label='val')
+    #
+    # ax4.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:,0],rotPose[:,1],rotPose[:,2], length=arrow_length, normalize=True, colors='r', label='pred')
+    # ax4.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:,0],rotVal[:,1],rotVal[:,2], length=arrow_length, normalize=True, colors='b', label='val')
+    plt.tight_layout()
 
-    ax4.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:,0],rotPose[:,1],rotPose[:,2], length=arrow_length, normalize=True, colors='r', label='pred')
-    ax4.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:,0],rotVal[:,1],rotVal[:,2], length=arrow_length, normalize=True, colors='b', label='val')
-
+    fig.show()
     return fig, ax
 
 
@@ -235,8 +244,10 @@ class NeRFSystem(LightningModule):
 
                 # gt coord system, val pose already there
                 val_poses2plot = np.array([self.train_dataset.poses_dict[img_id] for img_id in val_ids])
-                fig, ax = save_pose_plot(c2ws_est_aligned.cpu(), gt.cpu(), val_poses2plot, self.global_step // hparams.N_images, self.hparams.dataset_name)
+                fig, ax = save_pose_plot(c2ws_est_aligned.cpu().numpy(), gt.cpu().numpy(), val_poses2plot, self.global_step // hparams.N_images, self.hparams.dataset_name, "GT space")
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
+                fig, ax = save_pose_plot(poses.cpu().numpy(), align_ate_c2b_use_a2b(gt.cpu(), poses.cpu()).numpy(), val_pose_aligned.cpu().numpy(), self.global_step // hparams.N_images, self.hparams.dataset_name, "pred space")
+                self.logger.experiment.add_figure('val/path_estimate', fig, self.global_step)
         else:
             val_pose_aligned = c2w
 
