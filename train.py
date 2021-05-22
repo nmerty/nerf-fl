@@ -278,9 +278,14 @@ def main(hparams):
     N_iter_in_epoch = hparams.N_images
     max_iter = N_iter_in_epoch * hparams.num_epochs
 
-    step_lr_iter = hparams.N_images  # change lr every n steps
-    hparams.decay_step = list(range(0, max_iter, step_lr_iter))
-    hparams.decay_step_pose = list(range(0, max_iter, step_lr_iter))
+    if hparams.lr_scheduler == 'steplr':
+        step_lr_iter = hparams.N_images  # change lr every n steps
+
+        hparams.decay_step = list(range(0, max_iter, step_lr_iter))
+        hparams.decay_step_pose = list(range(0, max_iter, step_lr_iter))
+
+        hparams.decay_gamma = np.power(hparams.lr_end/hparams.lr, 1./hparams.num_epochs)
+        hparams.decay_gamma_pose = np.power(hparams.lr_pose_end/hparams.lr_pose, 1./hparams.num_epochs)
 
     seed_everything(hparams.random_seed)
 
