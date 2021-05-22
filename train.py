@@ -34,8 +34,11 @@ import matplotlib.pyplot as plt
 
 
 def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name):
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+    fig = plt.figure(figsize=(8, 8))
+    ax = fig.add_subplot(231, projection='3d')
+    ax2 = fig.add_subplot(222, projection='3d')
+    ax3 = fig.add_subplot(223, projection='3d')
+    ax4 = fig.add_subplot(224, projection='3d')
     bounds = 1 if dataset_name == 'llff' else 5
     ax.axes.set_xlim3d(left=-bounds, right=bounds)
     ax.axes.set_ylim3d(bottom=-bounds, top=bounds)
@@ -45,6 +48,17 @@ def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name):
     ax.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
     ax.legend()
     ax.set_title(f"Epoch: {current_epoch}")
+
+    ax3.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
+    ax3.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
+
+    ax4.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
+    ax4.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
+
+    ax2.plot(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], 'k.', label='GT')
+    ax2.plot(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], 'r.', label='pred')
+    ax2.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], 'b.', label='val')
+
     return fig, ax
 
 
