@@ -227,14 +227,14 @@ class NeRFSystem(LightningModule):
         # todo fix blender
         self.learn_poses.eval()
         val_ids = [self.val_dataset.val_idx]  # todo make a list in dataset
-        # todo set 1 step to only 1 image
+        # todo set 1 step to only 1 image, c2w always corresponds to ts
 
         if self.hparams.refine_pose:
             poses = torch.stack([self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys()) if img_id not in val_ids])
             gt = torch.from_numpy(np.array([self.train_dataset.poses_dict[img_id] for img_id in self.train_dataset.poses_dict.keys() if img_id not in val_ids]))
 
             '''Align est traj to gt traj'''
-            val_pose_aligned = align_ate_c2b_use_a2b(gt, poses, c2w)  # (N, 4, 4) todo gt val pose aligned to pred
+            val_pose_aligned = align_ate_c2b_use_a2b(gt, poses, c2w)  # (N, 4, 4) gt val pose aligned to pred
             if batch_nb == 0:
                 c2ws_est_aligned = align_ate_c2b_use_a2b(poses, gt)  # (N, 4, 4)
                 # compute ate for training poses (absolute trajectory error)
@@ -269,20 +269,6 @@ class NeRFSystem(LightningModule):
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
             self.logger.experiment.add_images('val/GT_pred_depth', stack, self.global_step)
-            """Test gt val pose"""
-            rays_o2, rays_d2 = get_rays(rays[:, :3], c2w.to(rays.device))
-            if self.hparams.dataset_name == 'llff':
-                rays_o2, rays_d2 = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
-                                              self.train_dataset.focal, 1.0, rays_o2, rays_d2)
-            # reassemble ray data struct
-            rays_2 = torch.cat([rays_o2, rays_d2, rays[:, 3:]], 1)
-            results2 = self(rays_2)  # run inference
-            img = results2[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu()  # (3, H, W)
-            img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu()  # (3, H, W)
-            depth = visualize_depth(results2[f'depth_{typ}'].view(H, W))  # (3, H, W)
-            stack = torch.stack([img_gt, img, depth])  # (3, 3, H, W)
-            self.logger.experiment.add_images('val/GT_pred_depth_test', stack, self.global_step)
-            """Test end"""
 
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
         log['val_psnr'] = psnr_
