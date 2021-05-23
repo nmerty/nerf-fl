@@ -246,8 +246,8 @@ class NeRFSystem(LightningModule):
                 val_poses2plot = np.array([self.train_dataset.poses_dict[img_id] for img_id in val_ids])
                 fig, ax = save_pose_plot(c2ws_est_aligned.cpu().numpy(), gt.cpu().numpy(), val_poses2plot, self.global_step // hparams.N_images, self.hparams.dataset_name, "GT space")
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
-                fig, ax = save_pose_plot(poses.cpu().numpy(), align_ate_c2b_use_a2b(gt.cpu(), poses.cpu()).numpy(), val_pose_aligned.cpu().numpy(), self.global_step // hparams.N_images, self.hparams.dataset_name, "pred space")
-                self.logger.experiment.add_figure('val/path_estimate', fig, self.global_step)
+                # fig, ax = save_pose_plot(poses.cpu().numpy(), align_ate_c2b_use_a2b(gt.cpu(), poses.cpu()).numpy(), val_pose_aligned.cpu().numpy(), self.global_step // hparams.N_images, self.hparams.dataset_name, "pred space")
+                # self.logger.experiment.add_figure('val/path_estimate', fig, self.global_step)
         else:
             val_pose_aligned = c2w
 
