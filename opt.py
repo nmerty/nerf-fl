@@ -1,5 +1,6 @@
 import argparse
 
+
 def get_opts():
     parser = argparse.ArgumentParser()
 
@@ -30,7 +31,7 @@ def get_opts():
                         help='number of hidden units in each layer')
     parser.add_argument('--N_layers', type=int, default=8,
                         help='number of layers')
-    parser.add_argument('--skip_connections',  nargs='+', type=int, default=[4],
+    parser.add_argument('--skip_connections', nargs='+', type=int, default=[4],
                         help='skip connections for pose embedding')
 
     parser.add_argument('--use_disp', default=False, action="store_true",
@@ -62,7 +63,7 @@ def get_opts():
 
     parser.add_argument('--batch_size', type=int, default=1024,
                         help='batch size')
-    parser.add_argument('--chunk', type=int, default=32*1024,
+    parser.add_argument('--chunk', type=int, default=32 * 1024,
                         help='chunk size to split the input to avoid OOM')
     parser.add_argument('--num_epochs', type=int, default=10000,
                         help='number of training epochs')
@@ -113,5 +114,26 @@ def get_opts():
                         help='paths to save checkpoints and logs to')
     parser.add_argument('--exp_name', type=str, default='exp',
                         help='experiment name')
+
+    # Feature Losses
+    parser.add_argument('--feature_loss',
+                        help='Feature loss to use.',
+                        default=None,
+                        type=str,
+                        choices=['vgg'],
+                        )
+    parser.add_argument('--fl_batch_size',
+                        help='batch size for the feature loss i.e. number of images',
+                        default=1,
+                        type=int,
+                        )
+    parser.add_argument('--fl_every_n_batch',
+                        help='frequency of applying feature loss',
+                        type=int,
+                        )
+    parser.add_argument('--feature_img_downsample', type=int, default=4,
+                        help='downsampling factor for the resolution of the image to be used for the feature loss')
+
+    parser.add_argument('--debug', '-D', action='store_true')
 
     return parser.parse_args()

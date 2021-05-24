@@ -1,36 +1,29 @@
 import os
-
-from datasets.ray_utils import get_rays, get_ndc_rays
-from models.poses import LearnPose
-from opt import get_opts
-import torch
 from collections import defaultdict
 
-from torch.utils.data import DataLoader
-from datasets import dataset_dict
-
-# models
-from models.nerf import *
-from models.rendering import *
-
-# optimizer, scheduler, visualization
-from utils import *
-
-# losses
-from losses import loss_dict
-
-# metrics
-from metrics import *
-
+import matplotlib.pyplot as plt
+from pytorch_lightning import LightningModule, Trainer, seed_everything
 # pytorch-lightning
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning import LightningModule, Trainer, seed_everything
 from pytorch_lightning.loggers import TestTubeLogger
+from torch.utils.data import DataLoader
 
+from datasets import dataset_dict
+from datasets.ray_utils import get_ndc_rays, get_rays
+from feature_losses.vgg_loss import VGGLoss
+from losses import loss_dict
+# metrics
+from metrics import *
+# models
+from models.nerf import *
+from models.poses import LearnPose
+from models.rendering import *
+from opt import get_opts
+# optimizer, scheduler, visualization
+from utils import *
 from utils.align_traj import align_ate_c2b_use_a2b
 from utils.comp_ate import compute_ate
 from utils.lie_group_helper import convert3x4_4x4
-import matplotlib.pyplot as plt
 
 
 def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name, title=""):
@@ -95,6 +88,8 @@ class NeRFSystem(LightningModule):
         load_ckpt(self.nerf_coarse, hparams.weight_path, 'nerf_coarse')
         self.automatic_optimization = False
 
+        self.use_feature_loss: bool = hparams.feature_loss is not None
+
         if hparams.N_importance > 0:
             self.nerf_fine = NeRF(hparams.N_layers, hparams.N_hidden_units, skips=hparams.skip_connections)
             self.models['fine'] = self.nerf_fine
@@ -141,6 +136,24 @@ class NeRFSystem(LightningModule):
         self.train_dataset = dataset(split='train', **kwargs)
         self.val_dataset = dataset(split='val', **kwargs)
 
+        if self.use_feature_loss:
+            fl_kwargs = kwargs.copy()
+            # We might use lower resolution images
+            downsample_factor = self.hparams.feature_img_downsample
+            w, h = tuple(self.hparams.img_wh)
+            assert w % downsample_factor == 0 and h % downsample_factor == 0
+            fl_kwargs['img_wh'] = (w // downsample_factor, h // downsample_factor)
+            print(f'fl_kwargs: {fl_kwargs}')
+            self.train_fl_dataset = dataset(split='train', feature_loss=True, **fl_kwargs)
+            self.train_fl_loader = DataLoader(
+                self.train_fl_dataset,
+                shuffle=True,
+                num_workers=2,
+                batch_size=self.hparams.fl_batch_size,
+                pin_memory=True
+            )
+            self.train_fl_iter = iter(self.train_fl_loader)
+
         N_images = len(self.train_dataset.poses_dict.keys())
         assert N_images == hparams.N_images, f"Set number of images in args to {N_images}"
         c2ws = convert3x4_4x4(torch.from_numpy(self.train_dataset.poses))
@@ -175,18 +188,34 @@ class NeRFSystem(LightningModule):
                           num_workers=4,
                           batch_size=1, # validate one image (H*W rays) at a time
                           pin_memory=True)
-    
+
+    def get_feature_loss(self):
+        if self.hparams.feature_loss == 'vgg':
+            vgg_loss = VGGLoss(
+                style_weight=1,
+                content_weight=1,
+                content_layers=["conv_1", "conv_2", "conv_3", "conv_4", "conv_5"],
+                style_layers=["conv_1", "conv_2", "conv_3", "conv_4", "conv_5"],
+                device=self.device
+            )
+            return vgg_loss
+        else:
+            raise NotImplementedError
+
     def training_step(self, batch, batch_nb, optimizer_idx):
         opt1, opt2 = self.optimizers()
         opt1.zero_grad()
         opt2.zero_grad()
 
+        _apply_feature_loss = self.use_feature_loss and batch_nb % self.hparams.fl_every_n_batch == 0
+        loss = 0.0
+        poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}
+
         rays, rgbs, ts = batch['rays'], batch['rgbs'], batch['ts']
 
         self.learn_poses.train()
-
-        poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}
-        c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
+        if not _apply_feature_loss:
+            c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
 
         rays_o, rays_d = get_rays(rays[:, :3], c2ws)
         if self.hparams.dataset_name == 'llff':
@@ -197,15 +226,62 @@ class NeRFSystem(LightningModule):
         results = self(rays_)
         loss = self.loss(results, rgbs)
 
-        with torch.no_grad():
             typ = 'fine' if 'rgb_fine' in results else 'coarse'
-            psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
+            with torch.no_grad():
+                psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
 
-        self.log('lr', get_learning_rate(opt1))
-        if self.hparams.refine_pose:
-            self.log('lr_pose', get_learning_rate(opt2))
-        self.log('train/loss', loss)
-        self.log('train/psnr', psnr_, prog_bar=True)
+            self.log('lr', get_learning_rate(opt1))
+            if self.hparams.refine_pose:
+                self.log('lr_pose', get_learning_rate(opt2))
+            self.log('train/loss', loss)
+            self.log('train/psnr', psnr_, prog_bar=True)
+
+        # Apply feature loss
+        if _apply_feature_loss:
+            feature_loss_ = self.get_feature_loss().to(self.device)
+            try:
+                fl_batch = next(self.train_fl_iter)
+            except StopIteration:
+                # print('Stop iteration encountered')
+                self.train_fl_iter = iter(self.train_fl_loader)
+                fl_batch = next(self.train_fl_iter)
+            fl_rays, fl_ts, fl_imgs_gt = fl_batch['rays'].to(self.device), fl_batch['ts'].to(self.device), fl_batch[
+                'img'].to(self.device)
+            fl_c2ws = torch.stack([poses[int(img_id)] for img_id in fl_ts])[:, :3]  # (N_images, 3)
+
+            # Merge first two dimensions i.e. use batch of rays instead of batch of images for inference
+            # (N_images, h * w, 6) -> (N_images * h * w, 6)
+            fl_n_images, fl_n_rays_per_image = fl_rays.shape[0], fl_rays.shape[1]
+            fl_rays = fl_rays.view(fl_n_images * fl_n_rays_per_image, -1)
+
+            # Repeat c2ws for rays of the same image (N_images, 3) -> (N_images*h*w, 3)
+            fl_c2ws = torch.repeat_interleave(fl_c2ws, repeats=fl_n_rays_per_image, dim=0)
+
+            # Same as NeRF inference
+            fl_rays_o, fl_rays_d = get_rays(fl_rays[:, :3], fl_c2ws)
+            fl_h, fl_w = self.train_fl_dataset.img_wh[1], self.train_fl_dataset.img_wh[0]
+            if self.hparams.dataset_name == 'llff':
+                fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
+            # reassemble ray data struct
+            fl_rays_ = torch.cat([fl_rays_o, fl_rays_d, fl_rays[:, 3:]], 1)
+            fl_results = self(fl_rays_)
+
+            typ = 'fine' if 'rgb_fine' in fl_results else 'coarse'
+            # Unmerge images dimension
+            fl_imgs = fl_results[f'rgb_{typ}'] \
+                .view(fl_n_images, fl_h, fl_w, 3) \
+                .permute(0, 3, 1, 2)  # (B, 3, H, W)
+
+            # Put a feature loss
+            # for img_idx in range(len(fl_imgs)):
+            #     img_gt = fl_imgs_gt[img_idx]
+            #     img = fl_imgs[img_idx].unsqueeze(0)  # fake batch dimension
+            #     feature_loss += self.feature_loss(img, img_gt, img_gt)
+            feature_loss = feature_loss_(fl_imgs, fl_imgs_gt, fl_imgs_gt)
+            loss += feature_loss
+            self.log(f'train/{self.hparams.feature_loss}_loss', feature_loss)
+
+
 
         self.manual_backward(loss)
         opt1.step()
@@ -261,13 +337,14 @@ class NeRFSystem(LightningModule):
         log['val_loss'] = self.loss(results, rgbs)
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
+        W, H = self.hparams.img_wh
+        img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1)  # (3, H, W)
+        img_gt = rgbs.view(H, W, 3).permute(2, 0, 1)  # (3, H, W)
+
         # plot validation image
         if batch_nb == 0:
-            W, H = self.hparams.img_wh
-            img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
-            img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
-            depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
-            stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
+            depth = visualize_depth(results[f'depth_{typ}'].view(H, W))  # (3, H, W)
+            stack = torch.stack([img_gt.cpu(), img.cpu(), depth])  # (3, 3, H, W)
             self.logger.experiment.add_images('val/GT_pred_depth', stack, self.global_step)
 
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
@@ -275,6 +352,14 @@ class NeRFSystem(LightningModule):
 
         ssim_ = ssim(results[f'rgb_{typ}'].view(1, *self.hparams.img_wh, 3), rgbs.view(1, *self.hparams.img_wh, 3))
         log['val_ssim'] = ssim_
+
+        if self.use_feature_loss:
+            feature_loss_ = self.get_feature_loss().to(self.device)
+            img = img.unsqueeze(0)
+            img_gt = img_gt.unsqueeze(0)
+            feature_loss = feature_loss_(img, img_gt, img_gt)
+            log[f'val_{self.hparams.feature_loss}_loss'] = feature_loss
+            log[f'val_total_loss'] = feature_loss + log['val_loss']
 
         return log
 
@@ -317,7 +402,7 @@ def main(hparams):
 
     logger = TestTubeLogger(save_dir=os.path.join(hparams.save_path, 'logs'),
                             name=hparams.exp_name,
-                            debug=False,
+                            debug=hparams.debug,
                             create_git_tag=False,
                             log_graph=False)
 

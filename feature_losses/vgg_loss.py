@@ -28,8 +28,8 @@ class Normalization(nn.Module):
 
 class ContentLoss(nn.Module):
     def __init__(
-        self,
-        target,
+            self,
+            target,
     ):
         super(ContentLoss, self).__init__()
         # we 'detach' the target content from the tree used
@@ -74,7 +74,15 @@ style_layers_default = ["conv_1", "conv_2", "conv_3", "conv_4", "conv_5"]
 
 
 def get_style_model_and_losses(
-    cnn, normalization_mean, normalization_std, style_img, content_img, device, content_layers=None, style_layers=None
+        cnn,
+        normalization_mean,
+        normalization_std,
+        style_img,
+        content_img,
+        device,
+        content_layers=None,
+        style_layers=None,
+        pool="max",
 ):
     if content_layers is None:
         content_layers = content_layers_default
@@ -83,7 +91,7 @@ def get_style_model_and_losses(
     cnn = copy.deepcopy(cnn)
 
     # normalization module
-    normalization = Normalization(normalization_mean, normalization_std).to(device)
+    normalization = Normalization(normalization_mean.to(device), normalization_std.to(device)).to(device)
 
     # just in order to have an iterable access to or list of content/style
     # losses
@@ -107,6 +115,8 @@ def get_style_model_and_losses(
             layer = nn.ReLU(inplace=False)
         elif isinstance(layer, nn.MaxPool2d):
             name = "pool_{}".format(i)
+            if pool == "avg":
+                layer = nn.AvgPool2d(kernel_size=2, stride=2)  # avg pool might bring better results
         elif isinstance(layer, nn.BatchNorm2d):
             name = "bn_{}".format(i)
         else:
@@ -138,14 +148,19 @@ def get_style_model_and_losses(
     return model, style_losses, content_losses
 
 
-class VGGLoss:
+class VGGLoss(nn.Module):
     def __init__(
-        self,
-        device,
-        style_weight=1e6,
-        content_weight=1,
+            self,
+            device,
+            style_weight=1e6,
+            content_weight=1,
+            content_layers=None,
+            style_layers=None,
     ):
         # TODO: style_weight and content_weight
+        super().__init__()
+        self.style_layers = style_layers
+        self.content_layers = content_layers
         self.style_weight = style_weight
         self.content_weight = content_weight
         self.device = device
@@ -153,8 +168,14 @@ class VGGLoss:
         for param in self.cnn.parameters():
             param.requires_grad_(False)
 
-        self.cnn_normalization_mean = torch.tensor(NORMALIZATION_MEAN).to(self.device)
-        self.cnn_normalization_std = torch.tensor(NORMALIZATION_STD).to(self.device)
+        self.register_buffer("cnn_normalization_mean", torch.tensor(NORMALIZATION_MEAN))
+        self.register_buffer("cnn_normalization_std", torch.tensor(NORMALIZATION_STD))
+
+        # self.cnn_normalization_mean = torch.tensor(NORMALIZATION_MEAN)
+        # self.cnn_normalization_std = torch.tensor(NORMALIZATION_STD)
+
+    # def __call__(self, *args, **kwargs):
+    #     return self.forward(*args, **kwargs)
 
     def forward(self, input_img, style_img, content_img):
         # TODO: Should the initialization be moved to constructor
@@ -166,6 +187,8 @@ class VGGLoss:
             style_img,
             content_img,
             device=self.device,
+            content_layers=self.content_layers,
+            style_layers=self.style_layers,
         )
         # TODO: Do we need to clamp values?
         # input_img = torch.clamp(input_img, 0, 1)
