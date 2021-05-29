@@ -226,15 +226,15 @@ class NeRFSystem(LightningModule):
         results = self(rays_)
         loss = self.loss(results, rgbs)
 
-            typ = 'fine' if 'rgb_fine' in results else 'coarse'
-            with torch.no_grad():
-                psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
+        typ = 'fine' if 'rgb_fine' in results else 'coarse'
+        with torch.no_grad():
+            psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
 
-            self.log('lr', get_learning_rate(opt1))
-            if self.hparams.refine_pose:
-                self.log('lr_pose', get_learning_rate(opt2))
-            self.log('train/loss', loss)
-            self.log('train/psnr', psnr_, prog_bar=True)
+        self.log('lr', get_learning_rate(opt1))
+        if self.hparams.refine_pose:
+            self.log('lr_pose', get_learning_rate(opt2))
+        self.log('train/loss', loss)
+        self.log('train/psnr', psnr_, prog_bar=True)
 
         # Apply feature loss
         if _apply_feature_loss:
