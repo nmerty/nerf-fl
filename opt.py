@@ -133,6 +133,10 @@ def get_opts():
                         )
     parser.add_argument('--feature_img_downsample', type=int, default=4,
                         help='downsampling factor for the resolution of the image to be used for the feature loss')
+    parser.add_argument('--apply_feature_loss_exclusively', action='store_true',
+                        help='Do not apply NeRF when applying feature loss. ')
+    parser.add_argument('--feature_loss_coeff', type=float, default=1e-3,
+                        help='Multiplier of feature loss contribution to total loss.')
 
     parser.add_argument('--debug', '-D', action='store_true')
 

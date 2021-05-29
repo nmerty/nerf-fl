@@ -214,27 +214,29 @@ class NeRFSystem(LightningModule):
         rays, rgbs, ts = batch['rays'], batch['rgbs'], batch['ts']
 
         self.learn_poses.train()
-        if not _apply_feature_loss:
+        if not (_apply_feature_loss and hparams.apply_feature_loss_exclusively):
+            # Do not apply NeRF when applying the feature loss
+            # In the current setup this means this batch is not used for NeRF
             c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
 
-        rays_o, rays_d = get_rays(rays[:, :3], c2ws)
-        if self.hparams.dataset_name == 'llff':
-            rays_o, rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
-                                          self.train_dataset.focal, 1.0, rays_o, rays_d)
-        # reassemble ray data struct
-        rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
-        results = self(rays_)
-        loss = self.loss(results, rgbs)
+            rays_o, rays_d = get_rays(rays[:, :3], c2ws)
+            if self.hparams.dataset_name == 'llff':
+                rays_o, rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
+                                              self.train_dataset.focal, 1.0, rays_o, rays_d)
+            # reassemble ray data struct
+            rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
+            results = self(rays_)
+            loss = self.loss(results, rgbs)
 
-        typ = 'fine' if 'rgb_fine' in results else 'coarse'
-        with torch.no_grad():
-            psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
+            typ = 'fine' if 'rgb_fine' in results else 'coarse'
+            with torch.no_grad():
+                psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
 
-        self.log('lr', get_learning_rate(opt1))
-        if self.hparams.refine_pose:
-            self.log('lr_pose', get_learning_rate(opt2))
-        self.log('train/loss', loss)
-        self.log('train/psnr', psnr_, prog_bar=True)
+            self.log('lr', get_learning_rate(opt1))
+            if self.hparams.refine_pose:
+                self.log('lr_pose', get_learning_rate(opt2))
+            self.log('train/loss', loss)
+            self.log('train/psnr', psnr_, prog_bar=True)
 
         # Apply feature loss
         if _apply_feature_loss:
@@ -278,10 +280,8 @@ class NeRFSystem(LightningModule):
             #     img = fl_imgs[img_idx].unsqueeze(0)  # fake batch dimension
             #     feature_loss += self.feature_loss(img, img_gt, img_gt)
             feature_loss = feature_loss_(fl_imgs, fl_imgs_gt, fl_imgs_gt)
-            loss += feature_loss
+            loss += feature_loss * hparams.feature_loss_coeff
             self.log(f'train/{self.hparams.feature_loss}_loss', feature_loss)
-
-
 
         self.manual_backward(loss)
         opt1.step()

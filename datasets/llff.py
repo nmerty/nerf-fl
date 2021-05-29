@@ -241,9 +241,9 @@ class LLFFDataset(Dataset):
         self.poses_dict = {i: self.poses[i] for i in range(self.poses.shape[0])}
 
         # ray directions for all pixels, same for all images (same H, W, focal)
-        print(f'{self.split} {self.feature_loss} self img wh {self.img_wh}')
+        # print(f'{self.split} {self.feature_loss} self img wh {self.img_wh}')
         self.directions = get_ray_directions(self.img_wh[1], self.img_wh[0], self.focal)  # (H, W, 3)
-        print(f'shape directions {self.directions.shape}')
+        # print(f'shape directions {self.directions.shape}')
         directions = self.directions.view(-1, 3)
 
         if self.feature_loss:
