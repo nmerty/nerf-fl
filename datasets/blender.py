@@ -8,6 +8,7 @@ from torchvision import transforms as T
 
 from .ray_utils import *
 
+
 class BlenderDataset(Dataset):
     def __init__(self, root_dir, split='train', img_wh=(800, 800)):
         self.root_dir = root_dir
@@ -20,8 +21,7 @@ class BlenderDataset(Dataset):
         self.white_back = True
 
     def read_meta(self):
-        with open(os.path.join(self.root_dir,
-                               f"transforms_{self.split}.json"), 'r') as f:
+        with open(os.path.join(self.root_dir, f"transforms_{self.split}.json"), 'r') as f:
             self.meta = json.load(f)
 
         w, h = self.img_wh
@@ -69,6 +69,14 @@ class BlenderDataset(Dataset):
             self.all_rays = torch.cat(self.all_rays, 0) # (len(self.meta['frames])*h*w, 3)
             self.all_rgbs = torch.cat(self.all_rgbs, 0) # (len(self.meta['frames])*h*w, 3)
 
+        if self.split == 'val':
+            self.val_poses = []
+            for idx in range(self.__len__()):
+                frame = self.meta['frames'][idx]
+                c2w = torch.tensor(frame['transform_matrix'])[:3, :4]
+                self.val_poses += [c2w]
+            self.val_poses = torch.stack(self.val_poses)
+
     def define_transforms(self):
         self.transform = T.ToTensor()
 
@@ -96,16 +104,16 @@ class BlenderDataset(Dataset):
             img = img.view(4, -1).permute(1, 0) # (H*W, 4) RGBA
             img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
 
-            rays_o, rays_d = get_rays(self.directions, c2w)
-
-            rays = torch.cat([rays_o, rays_d, 
-                              self.near*torch.ones_like(rays_o[:, :1]),
-                              self.far*torch.ones_like(rays_o[:, :1])],
+            directions = self.directions.view(-1, 3)
+            rays = torch.cat([directions,
+                              self.near*torch.ones_like(directions[:, :1]),
+                              self.far*torch.ones_like(directions[:, :1])],
                               1) # (H*W, 8)
 
             sample = {'rays': rays,
                       'rgbs': img,
                       'c2w': c2w,
+                      'ts': idx,
                       'valid_mask': valid_mask}
 
         return sample

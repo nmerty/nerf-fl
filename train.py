@@ -185,7 +185,7 @@ class NeRFSystem(LightningModule):
 
         self.learn_poses.train()
 
-        poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}
+        poses = [self.learn_poses(i) for i in range(self.learn_poses.num_cams)]
         c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
 
         rays_o, rays_d = get_rays(rays[:, :3], c2ws)
@@ -224,14 +224,11 @@ class NeRFSystem(LightningModule):
         rgbs = rgbs.squeeze() # (H*W, 3)
         ts = ts.squeeze()  # val id
 
-        # todo fix blender
         self.learn_poses.eval()
-        val_ids = [self.val_dataset.val_idx]  # todo make a list in dataset
-        # todo set 1 step to only 1 image, c2w always corresponds to ts
 
         if self.hparams.refine_pose:
-            poses = torch.stack([self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys()) if img_id not in val_ids])
-            gt = torch.from_numpy(np.array([self.train_dataset.poses_dict[img_id] for img_id in self.train_dataset.poses_dict.keys() if img_id not in val_ids]))
+            poses = torch.stack([self.learn_poses(i) for i in range(self.learn_poses.num_cams)])
+            gt = torch.from_numpy(self.train_dataset.poses)
 
             '''Align est traj to gt traj'''
             val_pose_aligned = align_ate_c2b_use_a2b(gt, poses, c2w)  # (N, 4, 4) gt val pose aligned to pred
@@ -243,7 +240,7 @@ class NeRFSystem(LightningModule):
                 log['val_rot'] = torch.tensor(stats_rot_est['mean'])
 
                 # gt coord system, val pose already there
-                val_poses2plot = np.array([self.train_dataset.poses_dict[img_id] for img_id in val_ids])
+                val_poses2plot = self.val_dataset.val_poses
                 fig, ax = save_pose_plot(c2ws_est_aligned.cpu().numpy(), gt.cpu().numpy(), val_poses2plot, self.global_step // hparams.N_images, self.hparams.dataset_name, "GT space")
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
                 # fig, ax = save_pose_plot(poses.cpu().numpy(), align_ate_c2b_use_a2b(gt.cpu(), poses.cpu()).numpy(), val_pose_aligned.cpu().numpy(), self.global_step // hparams.N_images, self.hparams.dataset_name, "pred space")
