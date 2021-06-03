@@ -90,6 +90,9 @@ class NeRFSystem(LightningModule):
 
         self.use_feature_loss: bool = hparams.feature_loss is not None
 
+        if hparams.feature_loss_updates != 'both' and not hparams.apply_feature_loss_exclusively:
+            raise ValueError('Feature loss should be applied separately if it only updates scene or pose.')
+
         if hparams.N_importance > 0:
             self.nerf_fine = NeRF(hparams.N_layers, hparams.N_hidden_units, skips=hparams.skip_connections)
             self.models['fine'] = self.nerf_fine
@@ -141,7 +144,7 @@ class NeRFSystem(LightningModule):
             # We might use lower resolution images
             downsample_factor = self.hparams.feature_img_downsample
             w, h = tuple(self.hparams.img_wh)
-            assert w % downsample_factor == 0 and h % downsample_factor == 0
+            # assert w % downsample_factor == 0 and h % downsample_factor == 0
             fl_kwargs['img_wh'] = (w // downsample_factor, h // downsample_factor)
             print(f'fl_kwargs: {fl_kwargs}')
             self.train_fl_dataset = dataset(split='train', feature_loss=True, **fl_kwargs)
@@ -189,11 +192,11 @@ class NeRFSystem(LightningModule):
                           batch_size=1, # validate one image (H*W rays) at a time
                           pin_memory=True)
 
-    def get_feature_loss(self):
+    def get_feature_loss(self, content_weight=1.0, style_weight=0.0, ):
         if self.hparams.feature_loss == 'vgg':
             vgg_loss = VGGLoss(
-                style_weight=1,
-                content_weight=1,
+                style_weight=style_weight,
+                content_weight=content_weight,
                 content_layers=["conv_1", "conv_2", "conv_3", "conv_4", "conv_5"],
                 style_layers=["conv_1", "conv_2", "conv_3", "conv_4", "conv_5"],
                 device=self.device
@@ -204,94 +207,133 @@ class NeRFSystem(LightningModule):
 
     def training_step(self, batch, batch_nb, optimizer_idx):
         opt1, opt2 = self.optimizers()
-        opt1.zero_grad()
-        opt2.zero_grad()
 
+        # Apply feature loss every n batch
         _apply_feature_loss = self.use_feature_loss and batch_nb % self.hparams.fl_every_n_batch == 0
-        loss = 0.0
+
         poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}
 
         rays, rgbs, ts = batch['rays'], batch['rgbs'], batch['ts']
 
         self.learn_poses.train()
-        if not (_apply_feature_loss and hparams.apply_feature_loss_exclusively):
-            # Do not apply NeRF when applying the feature loss
-            # In the current setup this means this batch is not used for NeRF
-            c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
 
-            rays_o, rays_d = get_rays(rays[:, :3], c2ws)
-            if self.hparams.dataset_name == 'llff':
-                rays_o, rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
-                                              self.train_dataset.focal, 1.0, rays_o, rays_d)
-            # reassemble ray data struct
-            rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
-            results = self(rays_)
-            loss = self.loss(results, rgbs)
+        c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
 
-            typ = 'fine' if 'rgb_fine' in results else 'coarse'
-            with torch.no_grad():
-                psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
+        rays_o, rays_d = get_rays(rays[:, :3], c2ws)
+        if self.hparams.dataset_name == 'llff':
+            rays_o, rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
+                                          self.train_dataset.focal, 1.0, rays_o, rays_d)
+        # reassemble ray data struct
+        rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
+        results = self(rays_)
+        loss = self.loss(results, rgbs)
 
-            self.log('lr', get_learning_rate(opt1))
-            if self.hparams.refine_pose:
-                self.log('lr_pose', get_learning_rate(opt2))
-            self.log('train/loss', loss)
-            self.log('train/psnr', psnr_, prog_bar=True)
+        typ = 'fine' if 'rgb_fine' in results else 'coarse'
+        with torch.no_grad():
+            psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
+
+        self.log('lr', get_learning_rate(opt1))
+        if self.hparams.refine_pose:
+            self.log('lr_pose', get_learning_rate(opt2))
+        self.log('train/loss', loss)
+        self.log('train/psnr', psnr_, prog_bar=True)
+
+        opt1.zero_grad()
+        opt2.zero_grad()
+        self.manual_backward(loss)  # Backward pass for NeRF loss
+
+        if _apply_feature_loss and not hparams.apply_feature_loss_exclusively:
+            # Combined update step for NeRF and feature loss
+            # Done later
+            pass
+        elif _apply_feature_loss and hparams.apply_feature_loss_exclusively:
+            # Step for NeRF loss and reset gradients for feature loss backward pass
+            opt1.step()
+            opt2.step()
+            opt1.zero_grad()
+            opt2.zero_grad()
+        elif not _apply_feature_loss:
+            # Step for NeRF loss -> done
+            opt1.step()
+            opt2.step()
 
         # Apply feature loss
         if _apply_feature_loss:
-            feature_loss_ = self.get_feature_loss().to(self.device)
-            try:
-                fl_batch = next(self.train_fl_iter)
-            except StopIteration:
-                # print('Stop iteration encountered')
-                self.train_fl_iter = iter(self.train_fl_loader)
-                fl_batch = next(self.train_fl_iter)
-            fl_rays, fl_ts, fl_imgs_gt = fl_batch['rays'].to(self.device), fl_batch['ts'].to(self.device), fl_batch[
-                'img'].to(self.device)
-            fl_c2ws = torch.stack([poses[int(img_id)] for img_id in fl_ts])[:, :3]  # (N_images, 3)
+            # print('_apply_feature_loss')
+            feature_loss = self.feature_forward()
+            self.manual_backward(feature_loss)
+            if hparams.feature_loss_updates == 'scene':
+                # Feature loss only updates scene
+                opt1.step()
+            elif hparams.feature_loss_updates == 'pose':
+                # Feature loss only updates pose
+                opt2.step()
+            else:
+                opt1.step()
+                opt2.step()
 
-            # Merge first two dimensions i.e. use batch of rays instead of batch of images for inference
-            # (N_images, h * w, 6) -> (N_images * h * w, 6)
-            fl_n_images, fl_n_rays_per_image = fl_rays.shape[0], fl_rays.shape[1]
-            fl_rays = fl_rays.view(fl_n_images * fl_n_rays_per_image, -1)
-
-            # Repeat c2ws for rays of the same image (N_images, 3) -> (N_images*h*w, 3)
-            fl_c2ws = torch.repeat_interleave(fl_c2ws, repeats=fl_n_rays_per_image, dim=0)
-
-            # Same as NeRF inference
-            fl_rays_o, fl_rays_d = get_rays(fl_rays[:, :3], fl_c2ws)
-            fl_h, fl_w = self.train_fl_dataset.img_wh[1], self.train_fl_dataset.img_wh[0]
-            if self.hparams.dataset_name == 'llff':
-                fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
-            # reassemble ray data struct
-            fl_rays_ = torch.cat([fl_rays_o, fl_rays_d, fl_rays[:, 3:]], 1)
-            fl_results = self(fl_rays_)
-
-            typ = 'fine' if 'rgb_fine' in fl_results else 'coarse'
-            # Unmerge images dimension
-            fl_imgs = fl_results[f'rgb_{typ}'] \
-                .view(fl_n_images, fl_h, fl_w, 3) \
-                .permute(0, 3, 1, 2)  # (B, 3, H, W)
-
-            # Put a feature loss
-            # for img_idx in range(len(fl_imgs)):
-            #     img_gt = fl_imgs_gt[img_idx]
-            #     img = fl_imgs[img_idx].unsqueeze(0)  # fake batch dimension
-            #     feature_loss += self.feature_loss(img, img_gt, img_gt)
-            feature_loss = feature_loss_(fl_imgs, fl_imgs_gt, fl_imgs_gt)
-            loss += feature_loss * hparams.feature_loss_coeff
-            self.log(f'train/{self.hparams.feature_loss}_loss', feature_loss)
-
-        self.manual_backward(loss)
-        opt1.step()
-        opt2.step()
-
-        # before 1.3 automatically called https://pytorch-lightning.readthedocs.io/en/latest/common/optimizers.html#learning-rate-scheduling-manual
+        # before 1.3 automatically called https://pytorch-lightning.readthedocs.io/en/latest/common/optimizers.html
+        # #learning-rate-scheduling-manual
         # scheduler1, scheduler2 = self.lr_schedulers()
         # scheduler1.step()
         # scheduler2.step()
-        return loss
+        # return loss
+
+    def feature_forward(self):
+        """
+        Do a forward pass for the feature loss.
+
+        Returns: Feature loss result
+        """
+
+        feature_loss_ = self.get_feature_loss(content_weight=1.0, style_weight=0.0).to(self.device)
+        try:
+            fl_batch = next(self.train_fl_iter)
+        except StopIteration:
+            # print('Stop iteration encountered')
+            self.train_fl_iter = iter(self.train_fl_loader)
+            fl_batch = next(self.train_fl_iter)
+
+        # TODO: do we need to do call this again or can it be passed as argument
+        poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}
+        self.learn_poses.train()
+
+        fl_rays, fl_ts, fl_imgs_gt = fl_batch['rays'].to(self.device), fl_batch['ts'].to(self.device), fl_batch[
+            'img'].to(self.device)
+        fl_c2ws = torch.stack([poses[int(img_id)] for img_id in fl_ts])[:, :3]  # (N_images, 3)
+
+        # Merge first two dimensions i.e. use batch of rays instead of batch of images for inference
+        # (N_images, h * w, 6) -> (N_images * h * w, 6)
+        fl_n_images, fl_n_rays_per_image = fl_rays.shape[0], fl_rays.shape[1]
+        fl_rays = fl_rays.view(fl_n_images * fl_n_rays_per_image, -1)
+
+        # Repeat c2ws for rays of the same image (N_images, 3) -> (N_images*h*w, 3)
+        fl_c2ws = torch.repeat_interleave(fl_c2ws, repeats=fl_n_rays_per_image, dim=0)
+
+        # Same as NeRF inference
+        fl_rays_o, fl_rays_d = get_rays(fl_rays[:, :3], fl_c2ws)
+        fl_h, fl_w = self.train_fl_dataset.img_wh[1], self.train_fl_dataset.img_wh[0]
+        if self.hparams.dataset_name == 'llff':
+            fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
+        # reassemble ray data struct
+        fl_rays_ = torch.cat([fl_rays_o, fl_rays_d, fl_rays[:, 3:]], 1)
+        fl_results = self(fl_rays_)
+
+        typ = 'fine' if 'rgb_fine' in fl_results else 'coarse'
+        # Unmerge images dimension
+        fl_imgs = fl_results[f'rgb_{typ}'] \
+            .view(fl_n_images, fl_h, fl_w, 3) \
+            .permute(0, 3, 1, 2)  # (B, 3, H, W)
+
+        # Put a feature loss
+        # for img_idx in range(len(fl_imgs)):
+        #     img_gt = fl_imgs_gt[img_idx]
+        #     img = fl_imgs[img_idx].unsqueeze(0)  # fake batch dimension
+        #     feature_loss += self.feature_loss(img, img_gt, img_gt)
+        feature_loss = feature_loss_(fl_imgs, fl_imgs_gt, fl_imgs_gt)
+        self.log(f'train/{self.hparams.feature_loss}_loss', feature_loss)
+        feature_loss = feature_loss * hparams.feature_loss_coeff
+        return feature_loss
 
     def validation_step(self, batch, batch_nb):
         log = {}
