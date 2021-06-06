@@ -41,7 +41,9 @@ def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name, title=""):
     ax2 = fig.add_subplot(212)
     # ax3 = fig.add_subplot(223, projection='3d')
     # ax4 = fig.add_subplot(224, projection='3d')
-    bounds = 0.5 if dataset_name == 'llff' else 5
+    bounds = {'llff': 0.5,
+              'blender': 5,
+              't&t': 0.8, }[dataset_name]
 
     fw = np.array([0,0,-1])
     rotGT = np.array(gt[:,:3,:3]@fw, dtype=np.float32)
@@ -226,7 +228,7 @@ class NeRFSystem(LightningModule):
 
         self.learn_poses.eval()
 
-        if self.hparams.refine_pose:
+        if self.hparams.refine_pose or (self.current_epoch == 0 and batch_nb == 0):
             poses = torch.stack([self.learn_poses(i) for i in range(self.learn_poses.num_cams)])
             gt = torch.from_numpy(self.train_dataset.poses)
 

@@ -11,7 +11,7 @@ def get_opts():
     parser.add_argument('--N_images', type=int, required=True,
                         help='Number of images in dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['blender', 'llff'],
+                        choices=['blender', 'llff', 't&t'],
                         help='which dataset to train/val')
     parser.add_argument('--img_wh', nargs="+", type=int, default=[800, 800],
                         help='resolution (img_w, img_h) of the image')
