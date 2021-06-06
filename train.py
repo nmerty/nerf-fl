@@ -281,14 +281,16 @@ class NeRFSystem(LightningModule):
         mean_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
         mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
-        mean_tr = outputs[0]['val_tr']
-        mean_rot = outputs[0]['val_rot']
+        if self.hparams.refine_pose:
+            mean_tr = outputs[0]['val_tr']
+            mean_rot = outputs[0]['val_rot']
 
         self.log('val/loss', mean_loss)
         self.log('val/psnr', mean_psnr, prog_bar=True)
         self.log('val/ssim', mean_ssim)
-        self.log('val/tr', mean_tr)
-        self.log('val/rot', mean_rot)
+        if self.hparams.refine_pose:
+            self.log('val/tr', mean_tr)
+            self.log('val/rot', mean_rot)
 
 
 def main(hparams):
