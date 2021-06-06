@@ -155,7 +155,7 @@ class NeRFSystem(LightningModule):
                 batch_size=self.hparams.fl_batch_size,
                 pin_memory=True
             )
-            self.train_fl_iter = iter(self.train_fl_loader)
+            self.train_fl_iter = iter(iter_cycle(self.train_fl_loader))
 
         N_images = len(self.train_dataset.poses_dict.keys())
         assert N_images == hparams.N_images, f"Set number of images in args to {N_images}"
@@ -287,12 +287,7 @@ class NeRFSystem(LightningModule):
         """
 
         feature_loss_ = self.get_feature_loss(content_weight=1.0, style_weight=0.0).to(self.device)
-        try:
-            fl_batch = next(self.train_fl_iter)
-        except StopIteration:
-            # print('Stop iteration encountered')
-            self.train_fl_iter = iter(self.train_fl_loader)
-            fl_batch = next(self.train_fl_iter)
+        fl_batch = next(self.train_fl_iter)
 
         # TODO: do we need to do call this again or can it be passed as argument
         poses = {img_id: self.learn_poses(i) for i, img_id in enumerate(self.train_dataset.poses_dict.keys())}

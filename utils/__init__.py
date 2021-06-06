@@ -1,12 +1,22 @@
 import torch
-# optimizer
-from torch.optim import SGD, Adam
 import torch_optimizer as optim
+# optimizer
+from torch.optim import Adam, SGD
 # scheduler
-from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
-from .warmup_scheduler import GradualWarmupScheduler
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, MultiStepLR
 
+from .warmup_scheduler import GradualWarmupScheduler
 from .visualization import *
+
+def iter_cycle(iterable):
+    """
+    Lets you iterate over a finite iterable forever i.e. overcomes StopIteration.
+    """
+    # https://discuss.pytorch.org/t/in-what-condition-the-dataloader-would-raise-stopiteration/17483/3
+    while True:
+        for x in iterable:
+            yield x
+
 
 def get_parameters(models):
     """Get all model parameters recursively."""

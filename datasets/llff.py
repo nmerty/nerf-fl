@@ -1,4 +1,5 @@
 import os
+from typing import Optional, Tuple
 
 import numpy as np
 from PIL import Image
@@ -8,6 +9,7 @@ from torchvision import transforms as T
 from .colmap_utils import \
     read_cameras_binary, read_images_binary, read_points3d_binary
 from .ray_utils import *
+from .transform_utils import random_crop_tensors
 
 
 def normalize(v):
@@ -159,8 +161,14 @@ def create_spheric_poses(radius, n_poses=120):
 
 
 class LLFFDataset(Dataset):
-    def __init__(self, root_dir, split='train', img_wh=(504, 378), spheric_poses=False, val_num=1,
-                 feature_loss: bool = False, ):
+    def __init__(self,
+                 root_dir,
+                 split='train',
+                 img_wh=(504, 378),
+                 spheric_poses=False,
+                 val_num=1,
+                 feature_loss: bool = False,
+                 feature_loss_crop_size: Optional[Tuple[int, int]] = None, ):
         """
         spheric_poses: whether the images are taken in a spheric inward-facing manner
                        default: False (forward-facing)
@@ -172,6 +180,7 @@ class LLFFDataset(Dataset):
         self.spheric_poses = spheric_poses
         self.val_num = max(1, val_num)  # at least 1
         self.feature_loss = feature_loss
+        self.feature_loss_crop_size = feature_loss_crop_size
 
         self.define_transforms()
 
@@ -264,8 +273,10 @@ class LLFFDataset(Dataset):
                 img = self.transform(img)  # (3, h, w)
                 if self.feature_loss:
                     self.images.append(img)  # save 2D image C x H x W
-                img = img.view(3, -1).permute(1, 0)  # (h*w, 3) RGB
-                self.all_rgbs += [img]
+                    # No need to store image twice -> skip saving rgbs
+                else:
+                    img = img.view(3, -1).permute(1, 0)  # (h*w, 3) RGB
+                    self.all_rgbs += [img]
                 if not self.spheric_poses:
                     near, far = 0, 1
                     # near plane is always at 1.0
@@ -327,12 +338,30 @@ class LLFFDataset(Dataset):
                     'rgbs': self.all_rgbs[idx]
                 }
             else:
+                rays = self.all_rays[idx, ..., :-1]  # H*W x 5
+                img = self.images[idx]  # 3 x H x W
+                ts = self.all_rays[idx, 0, -1].long()
+
+                if self.feature_loss_crop_size:
+                    # Crop image and get corresponding rays
+                    h, w = img.shape[1:]
+                    # to image shape
+                    rays = rays.permute(1, 0).view(-1, h, w)  # 5 x H x W
+
+                    img, rays = random_crop_tensors(self.feature_loss_crop_size, img, rays)
+
+                    # back to NeRF expected shape
+                    rays = rays.view(rays.shape[0], -1).permute(1, 0)
+
+                # Flatten image to rgb array
+                rgbs = img.view(3, -1).permute(1, 0)  # (h*w, 3) RGB
+
                 # Rays and rgbs of an image are all in the same sample together
                 sample = {
-                    'rays': self.all_rays[idx, ..., :-1],
-                    'ts': self.all_rays[idx, 0, -1].long(),
-                    'rgbs': self.all_rgbs[idx],
-                    'img': self.images[idx]
+                    'rays': rays,
+                    'ts': ts,
+                    'rgbs': rgbs,
+                    'img': img
                 }
 
         else:
