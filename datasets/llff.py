@@ -255,7 +255,12 @@ class LLFFDataset(Dataset):
 
         # ray directions for all pixels, same for all images (same H, W, focal)
         # print(f'{self.split} {self.feature_loss} self img wh {self.img_wh}')
-        self.directions = get_ray_directions(self.img_wh[1], self.img_wh[0], self.focal)  # (H, W, 3)
+
+        self.K = np.array([
+            [self.focal, 0, W / 2],
+            [0, self.focal, H / 2],
+            [0, 0, 1]])
+        self.directions = get_ray_directions(self.img_wh[1], self.img_wh[0], self.K)  # (H, W, 3)
         # print(f'shape directions {self.directions.shape}')
         directions = self.directions.view(-1, 3)
 
@@ -388,7 +393,7 @@ class LLFFDataset(Dataset):
                              1)  # (h*w, 6)
 
             sample = {'rays': rays,
-                      'ts': self.val_idx,
+                      'ts': self.val_idx * torch.ones(len(rays), dtype=torch.long),
                       'c2w': c2w
                       }
 

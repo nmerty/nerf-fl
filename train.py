@@ -67,14 +67,26 @@ class NeRFSystem(LightningModule):
         super(NeRFSystem, self).__init__()
         self.hparams = hparams
 
-        self.loss = loss_dict['color'](coef=1)
+        self.loss = loss_dict['nerfw'](coef=1)
 
-        self.embedding_xyz = Embedding(3, hparams.N_emb_xyz, epoch_start=hparams.barf_start, epoch_end=hparams.barf_end)
-        self.embedding_dir = Embedding(3, hparams.N_emb_dir)
+        self.models_to_train = []
+        self.embedding_xyz = PosEmbedding(hparams.N_emb_xyz-1, hparams.N_emb_xyz, epoch_start=hparams.barf_start, epoch_end=hparams.barf_end)
+        self.embedding_dir = PosEmbedding(hparams.N_emb_dir-1, hparams.N_emb_dir, epoch_start=hparams.barf_start, epoch_end=hparams.barf_end)
         self.embeddings = {'xyz': self.embedding_xyz,
                            'dir': self.embedding_dir}
 
-        self.nerf_coarse = NeRF(hparams.N_layers, hparams.N_hidden_units, skips=hparams.skip_connections)
+        if hparams.encode_a:
+            self.embedding_a = torch.nn.Embedding(hparams.N_vocab, hparams.N_a)
+            self.embeddings['a'] = self.embedding_a
+            self.models_to_train += [self.embedding_a]
+        if hparams.encode_t:
+            self.embedding_t = torch.nn.Embedding(hparams.N_vocab, hparams.N_tau)
+            self.embeddings['t'] = self.embedding_t
+            self.models_to_train += [self.embedding_t]
+
+        self.nerf_coarse = NeRF('coarse',
+                                in_channels_xyz=6 * hparams.N_emb_xyz + 3,
+                                in_channels_dir=6 * hparams.N_emb_dir + 3)
         self.models = {'coarse': self.nerf_coarse}
         load_ckpt(self.nerf_coarse, hparams.weight_path, 'nerf_coarse')
         self.automatic_optimization = False
@@ -85,16 +97,24 @@ class NeRFSystem(LightningModule):
             raise ValueError('Feature loss should be applied separately if it only updates scene or pose.')
 
         if hparams.N_importance > 0:
-            self.nerf_fine = NeRF(hparams.N_layers, hparams.N_hidden_units, skips=hparams.skip_connections)
+            self.nerf_fine = NeRF('fine',
+                                  in_channels_xyz=6 * hparams.N_emb_xyz + 3,
+                                  in_channels_dir=6 * hparams.N_emb_dir + 3,
+                                  encode_appearance=hparams.encode_a,
+                                  in_channels_a=hparams.N_a,
+                                  encode_transient=hparams.encode_t,
+                                  in_channels_t=hparams.N_tau,
+                                  beta_min=hparams.beta_min)
             self.models['fine'] = self.nerf_fine
             load_ckpt(self.nerf_fine, hparams.weight_path, 'nerf_fine')
+        self.models_to_train += [self.models]
 
     def get_progress_bar_dict(self):
         items = super().get_progress_bar_dict()
         items.pop("v_num", None)
         return items
 
-    def forward(self, rays):
+    def forward(self, rays, ts):
         """Do batched inference on rays using chunk."""
         kwargs = {'current_epoch': self.global_step // self.hparams.N_images}
         B = rays.shape[0]
@@ -104,6 +124,7 @@ class NeRFSystem(LightningModule):
                 render_rays(self.models,
                             self.embeddings,
                             rays[i:i+self.hparams.chunk],
+                            ts[i:i+self.hparams.chunk],
                             self.hparams.N_samples,
                             self.hparams.use_disp,
                             self.hparams.perturb,
@@ -122,11 +143,16 @@ class NeRFSystem(LightningModule):
 
     def setup(self, stage):
         dataset = dataset_dict[self.hparams.dataset_name]
-        kwargs = {'root_dir': self.hparams.root_dir,
-                  'img_wh': tuple(self.hparams.img_wh)}
-        if self.hparams.dataset_name == 'llff':
-            kwargs['spheric_poses'] = self.hparams.spheric_poses
+        kwargs = {'root_dir': self.hparams.root_dir}
+        if self.hparams.dataset_name == 'phototourism':
+            kwargs['img_downscale'] = self.hparams.img_downscale
             kwargs['val_num'] = self.hparams.num_gpus
+            kwargs['use_cache'] = self.hparams.use_cache
+        elif self.hparams.dataset_name == 'blender':
+            kwargs['img_wh'] = tuple(self.hparams.img_wh)
+            kwargs['perturbation'] = self.hparams.data_perturb
+        else:
+            kwargs['img_wh'] = tuple(self.hparams.img_wh)
         self.train_dataset = dataset(split='train', **kwargs)
         self.val_dataset = dataset(split='val', **kwargs)
 
@@ -159,7 +185,7 @@ class NeRFSystem(LightningModule):
         # load_ckpt(self.learn_poses, hparams...)
 
     def configure_optimizers(self):
-        optimizer = get_optimizer(self.hparams, self.models)
+        optimizer = get_optimizer(self.hparams, self.models_to_train)
         scheduler = get_scheduler(self.hparams, optimizer)
 
         optimizer_pose = Adam(get_parameters(self.learn_poses), lr=self.hparams.lr_pose, eps=1e-8,
@@ -215,8 +241,9 @@ class NeRFSystem(LightningModule):
                                           self.train_dataset.focal, 1.0, rays_o, rays_d)
         # reassemble ray data struct
         rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
-        results = self(rays_)
-        loss = self.loss(results, rgbs)
+        results = self(rays_, ts)
+        loss_d = self.loss(results, rgbs)
+        loss = sum(l for l in loss_d.values())
 
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
         with torch.no_grad():
@@ -353,9 +380,11 @@ class NeRFSystem(LightningModule):
                                           self.train_dataset.focal, 1.0, rays_o, rays_d)
         # reassemble ray data struct
         rays_ = torch.cat([rays_o, rays_d, rays[:, 3:]], 1)
-        results = self(rays_)  # run inference
-        log['val_loss'] = self.loss(results, rgbs)
+        results = self(rays_, ts)  # run inference
+
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
+        loss_d = self.loss(results, rgbs)
+        log['val_loss'] = sum(l for l in loss_d.values())
 
         W, H = self.hparams.img_wh
         img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1)  # (3, H, W)

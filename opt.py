@@ -12,12 +12,17 @@ def get_opts():
     parser.add_argument('--N_images', type=int, required=True,
                         help='Number of images in dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['blender', 'llff', 't&t'],
+                        choices=['blender', 'llff', 't&t', 'phototourism'],
                         help='which dataset to train/val')
     parser.add_argument('--img_wh', nargs="+", type=int, default=[800, 800],
                         help='resolution (img_w, img_h) of the image')
     parser.add_argument('--spheric_poses', default=False, action="store_true",
                         help='whether images are taken in spheric poses (for llff)')
+    # for phototourism
+    parser.add_argument('--img_downscale', type=int, default=1,
+                        help='how much to downscale the images for phototourism dataset')
+    parser.add_argument('--use_cache', default=False, action="store_true",
+                        help='whether to use ray cache (make sure img_downscale is the same)')
 
     parser.add_argument('--N_emb_xyz', type=int, default=10,
                         help='number of xyz embedding frequencies')
@@ -53,7 +58,20 @@ def get_opts():
                         help='Set alpha between start and end for pos encoding')
     parser.add_argument('--barf_end', type=int, default=-1,
                         help='Set alpha between start and end for pos encoding')
-
+    # NeRF-W parameters
+    parser.add_argument('--N_vocab', type=int, default=100,
+                        help='''number of vocabulary (number of images) 
+                                   in the dataset for nn.Embedding''')
+    parser.add_argument('--encode_a', default=False, action="store_true",
+                        help='whether to encode appearance (NeRF-A)')
+    parser.add_argument('--N_a', type=int, default=48,
+                        help='number of embeddings for appearance')
+    parser.add_argument('--encode_t', default=False, action="store_true",
+                        help='whether to encode transient object (NeRF-U)')
+    parser.add_argument('--N_tau', type=int, default=16,
+                        help='number of embeddings for transient objects')
+    parser.add_argument('--beta_min', type=float, default=0.1,
+                        help='minimum color variance for each ray')
     # parser.add_argument('--decay_step_pose', nargs='+', type=int, default=list(range(0,370000,3700)),
     #                     help='scheduler decay step for pose params')
     # parser.add_argument('--decay_gamma_pose', type=float, default=0.9,

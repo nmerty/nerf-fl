@@ -42,7 +42,7 @@ class TanksAndTemplesDataset(Dataset):
 
         # bounds, common for all scenes todo fix
         self.near = 0.0
-        self.far = 6.0
+        self.far = 2.0
 
         # ray directions for all pixels, same for all images (same H, W, focal)
         self.directions = get_ray_directions(h, w, self.focal) # (h, w, 3)

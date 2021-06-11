@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+
 class ColorLoss(nn.Module):
     def __init__(self, coef=1):
         super().__init__()
