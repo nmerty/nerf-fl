@@ -63,20 +63,9 @@ def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name, title=""):
     ax2.plot(poses[:, 0, 3], poses[:, 1, 3], 'r.', label='pred')
     ax2.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], 'b.', label='val')
     ax2.legend()
-
-    #
-    # ax2.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:, 0], rotGT[:, 1], rotGT[:, 2], length=arrow_length, normalize=True, colors='k', label='GT')
-    # ax2.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:, 0], rotVal[:, 1], rotVal[:, 2], length=arrow_length, normalize=True, colors='b', label='val')
-    # ax2.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:, 0], rotPose[:, 1], rotPose[:, 2], length=arrow_length, normalize=True, colors='r', label='pred')
-    #
-    # ax3.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:,0],rotGT[:,1],rotGT[:,2], length=arrow_length, normalize=True, colors='k', label='GT')
-    # ax3.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:,0],rotVal[:,1],rotVal[:,2], length=arrow_length, normalize=True, colors='b', label='val')
-    #
-    # ax4.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:,0],rotPose[:,1],rotPose[:,2], length=arrow_length, normalize=True, colors='r', label='pred')
-    # ax4.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:,0],rotVal[:,1],rotVal[:,2], length=arrow_length, normalize=True, colors='b', label='val')
     plt.tight_layout()
 
-    fig.show()
+    # fig.show()
     return fig, ax
 
 
