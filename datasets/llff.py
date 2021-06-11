@@ -247,6 +247,10 @@ class LLFFDataset(Dataset):
         self.bounds /= scale_factor
         self.poses[..., 3] /= scale_factor
 
+        self.val_idx = val_idx
+        self.val_poses = np.stack([self.poses[self.val_idx][:3, :4]])
+        self.poses = np.delete(self.poses, self.val_idx, axis=0)
+
         self.poses_dict = {i: self.poses[i] for i in range(self.poses.shape[0])}
 
         # ray directions for all pixels, same for all images (same H, W, focal)
@@ -286,7 +290,8 @@ class LLFFDataset(Dataset):
                     near = self.bounds.min()
                     far = min(8 * near, self.bounds.max())  # focus on central object only
 
-                rays_t = i * torch.ones(len(directions), 1)
+                img_id = i if i < val_idx else i-1  # ignore val id (hack)
+                rays_t = img_id * torch.ones(len(directions), 1)
                 # save direction instead of camera center/dir in world space
                 self.all_rays += [torch.cat([directions,
                                              near * torch.ones_like(directions[:, :1]),
@@ -302,8 +307,6 @@ class LLFFDataset(Dataset):
 
         elif self.split == 'val':
             print('val image is', self.image_paths[val_idx])
-            self.val_idx = val_idx
-
         else:  # for testing, create a parametric rendering path
             if self.split.endswith('train'):  # test on training set
                 self.poses_test = self.poses
@@ -366,7 +369,7 @@ class LLFFDataset(Dataset):
 
         else:
             if self.split == 'val':
-                c2w = torch.FloatTensor(self.poses[self.val_idx])
+                c2w = torch.FloatTensor(self.val_poses[0])
             elif self.split == 'test_train':
                 c2w = torch.FloatTensor(self.poses[idx])
             else:
@@ -391,7 +394,7 @@ class LLFFDataset(Dataset):
 
             if self.split in ['val', 'test_train']:
                 if self.split == 'val':
-                    idx = self.val_idx
+                    idx = self.val_idx  # todo what here
                 img = Image.open(self.image_paths[idx]).convert('RGB')
                 img = img.resize(self.img_wh, Image.LANCZOS)
                 img = self.transform(img)  # (3, h, w)
