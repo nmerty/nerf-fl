@@ -72,21 +72,23 @@ def get_ndc_rays(H, W, focal, near, rays_o, rays_d):
         rays_o: (N_rays, 3), the origin of the rays in NDC
         rays_d: (N_rays, 3), the direction of the rays in NDC
     """
+    eps = 1e-8
+
     # Shift ray origins to near plane
-    t = -(near + rays_o[...,2]) / rays_d[...,2]
+    t = -(near + rays_o[...,2]) / (rays_d[..., 2] + eps)  # fix zero division
     rays_o = rays_o + t[...,None] * rays_d
 
     # Store some intermediate homogeneous results
-    ox_oz = rays_o[...,0] / rays_o[...,2]
-    oy_oz = rays_o[...,1] / rays_o[...,2]
+    ox_oz = rays_o[...,0] / (rays_o[...,2] + eps)
+    oy_oz = rays_o[...,1] / (rays_o[...,2] + eps)
     
     # Projection
     o0 = -1./(W/(2.*focal)) * ox_oz
     o1 = -1./(H/(2.*focal)) * oy_oz
-    o2 = 1. + 2. * near / rays_o[...,2]
+    o2 = 1. + 2. * near / (rays_o[...,2] + eps)
 
-    d0 = -1./(W/(2.*focal)) * (rays_d[...,0]/rays_d[...,2] - ox_oz)
-    d1 = -1./(H/(2.*focal)) * (rays_d[...,1]/rays_d[...,2] - oy_oz)
+    d0 = -1./(W/(2.*focal)) * (rays_d[...,0]/(rays_d[...,2] + eps) - ox_oz)
+    d1 = -1./(H/(2.*focal)) * (rays_d[...,1]/(rays_d[...,2] + eps) - oy_oz)
     d2 = 1 - o2
     
     rays_o = torch.stack([o0, o1, o2], -1) # (B, 3)
