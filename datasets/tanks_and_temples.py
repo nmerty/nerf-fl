@@ -1,3 +1,4 @@
+import cv2
 import torch
 from torch.utils.data import Dataset
 import json
@@ -9,11 +10,10 @@ from torchvision import transforms as T
 from .ray_utils import *
 
 
-class BlenderDataset(Dataset):
+class TanksAndTemplesDataset(Dataset):
     def __init__(self, root_dir, split='train', img_wh=(800, 800)):
         self.root_dir = root_dir
         self.split = split
-        assert img_wh[0] == img_wh[1], 'image width must equal image height!'
         self.img_wh = img_wh
         self.define_transforms()
 
@@ -21,20 +21,29 @@ class BlenderDataset(Dataset):
         self.white_back = True
 
     def read_meta(self):
-        with open(os.path.join(self.root_dir, f"transforms_{self.split}.json"), 'r') as f:
-            self.meta = json.load(f)
+        def parse_txt(filename):  # https://github.com/Kai-46/nerfplusplus/blob/master/data_loader_split.py
+            assert os.path.isfile(filename)
+            nums = open(filename).read().split()
+            return np.array([float(x) for x in nums]).reshape([4, 4]).astype(np.float32)
 
+        self.real_split = 'test' if self.split == 'val' else self.split
+        self.filenames = sorted([file[:-len('.png')] for file in os.listdir(os.path.join(self.root_dir, self.real_split, 'rgb')) if file.endswith('.png')])
+        self.num_cams = len(self.filenames)
+
+        # assume shared
+        intrinsics = parse_txt(os.path.join(self.root_dir, self.real_split, 'intrinsics', f'{self.filenames[0]}.txt'))
+        poses = np.stack([parse_txt(os.path.join(self.root_dir, self.real_split, 'pose', f'{filename}.txt')) for filename in self.filenames])
+        poses = np.concatenate([poses[..., 0:1], -poses[..., 1:3], poses[..., 3:4]], -1)
+
+        img = cv2.imread(os.path.join(self.root_dir, self.real_split, 'rgb', f'{self.filenames[0]}.png'))
         w, h = self.img_wh
-        self.focal = 0.5*800/np.tan(0.5*self.meta['camera_angle_x']) # original focal length
-                                                                     # when W=800
+        H, W, *C = img.shape
+        self.focal = intrinsics[0,0] * self.img_wh[0]/W
 
-        self.focal *= self.img_wh[0]/800 # modify focal length to match size self.img_wh
-
-        # bounds, common for all scenes
-        self.near = 2.0
+        # bounds, common for all scenes todo fix
+        self.near = 0.0
         self.far = 6.0
-        self.bounds = np.array([self.near, self.far])
-        
+
         # ray directions for all pixels, same for all images (same H, W, focal)
         self.directions = get_ray_directions(h, w, self.focal) # (h, w, 3)
         directions = self.directions.view(-1, 3)
@@ -43,17 +52,16 @@ class BlenderDataset(Dataset):
             self.poses = []
             self.all_rays = []
             self.all_rgbs = []
-            for i, frame in enumerate(self.meta['frames']):
-                pose = np.array(frame['transform_matrix'])[:3, :4]
+            for i, pose in enumerate(poses):
                 self.poses += [pose]
 
-                image_path = os.path.join(self.root_dir, f"{frame['file_path']}.png")
+                image_path = os.path.join(self.root_dir, self.real_split, 'rgb', f"{self.filenames[i]}.png")
                 self.image_paths += [image_path]
                 img = Image.open(image_path)
+                assert img.size[1]*self.img_wh[0] == img.size[0]*self.img_wh[1], f"{image_path} has different aspect ratio than img_wh, please check your data!"
                 img = img.resize(self.img_wh, Image.LANCZOS)
-                img = self.transform(img) # (4, h, w)
-                img = img.view(4, -1).permute(1, 0) # (h*w, 4) RGBA
-                img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
+                img = self.transform(img) # (3, h, w)
+                img = img.view(3, -1).permute(1, 0) # (h*w, 3)
                 self.all_rgbs += [img]
                 rays_t = i * torch.ones(len(directions), 1)
 
@@ -63,8 +71,8 @@ class BlenderDataset(Dataset):
                                              rays_t],
                                              1)] # (h*w, 6)
 
-            self.poses = np.stack(self.poses)
-            self.poses_dict = {i: self.poses[i] for i in range(self.poses.shape[0])}
+            self.poses = np.stack(self.poses)[:, :3, :4]
+            self.poses_dict = {int(self.filenames[i]): self.poses[i] for i in range(self.poses.shape[0])}
 
             self.all_rays = torch.cat(self.all_rays, 0) # (len(self.meta['frames])*h*w, 3)
             self.all_rgbs = torch.cat(self.all_rgbs, 0) # (len(self.meta['frames])*h*w, 3)
@@ -72,8 +80,7 @@ class BlenderDataset(Dataset):
         if self.split == 'val':
             self.val_poses = []
             for idx in range(self.__len__()):
-                frame = self.meta['frames'][idx]
-                c2w = torch.tensor(frame['transform_matrix'])[:3, :4]
+                c2w = torch.tensor(poses[idx])[:3, :4]
                 self.val_poses += [c2w]
             self.val_poses = torch.stack(self.val_poses)
 
@@ -85,7 +92,7 @@ class BlenderDataset(Dataset):
             return len(self.all_rays)
         if self.split == 'val':
             return 8 # only validate 8 images (to support <=8 gpus)
-        return len(self.meta['frames'])
+        return self.num_cams
 
     def __getitem__(self, idx):
         if self.split == 'train': # use data in the buffers
@@ -94,15 +101,12 @@ class BlenderDataset(Dataset):
                       'rgbs': self.all_rgbs[idx]}
 
         else: # create data for each image separately
-            frame = self.meta['frames'][idx]
-            c2w = torch.FloatTensor(frame['transform_matrix'])[:3, :4]
+            c2w = self.val_poses[idx][:3, :4]
 
-            img = Image.open(os.path.join(self.root_dir, f"{frame['file_path']}.png"))
+            img = Image.open(os.path.join(self.root_dir, self.real_split, 'rgb', f"{self.filenames[idx]}.png"))
             img = img.resize(self.img_wh, Image.LANCZOS)
-            img = self.transform(img) # (4, H, W)
-            valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
-            img = img.view(4, -1).permute(1, 0) # (H*W, 4) RGBA
-            img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
+            img = self.transform(img)  # (3, h, w)
+            img = img.view(3, -1).permute(1, 0)  # (h*w, 3)
 
             directions = self.directions.view(-1, 3)
             rays = torch.cat([directions,
@@ -113,7 +117,6 @@ class BlenderDataset(Dataset):
             sample = {'rays': rays,
                       'rgbs': img,
                       'c2w': c2w,
-                      'ts': idx,
-                      'valid_mask': valid_mask}
+                      'ts': idx}
 
         return sample
