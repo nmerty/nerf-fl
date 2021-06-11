@@ -349,8 +349,8 @@ class LLFFDataset(Dataset):
                     h, w = img.shape[1:]
                     # to image shape
                     rays = rays.permute(1, 0).view(-1, h, w)  # 5 x H x W
-
-                    img, rays = random_crop_tensors(self.feature_loss_crop_size, img, rays)
+                    fl_w, fl_h = self.feature_loss_crop_size
+                    img, rays = random_crop_tensors(fl_h, fl_w, img, rays)
 
                     # back to NeRF expected shape
                     rays = rays.view(rays.shape[0], -1).permute(1, 0)

@@ -312,7 +312,11 @@ class NeRFSystem(LightningModule):
 
         # Same as NeRF inference
         fl_rays_o, fl_rays_d = get_rays(fl_rays[:, :3], fl_c2ws)
-        fl_h, fl_w = self.train_fl_dataset.img_wh[1], self.train_fl_dataset.img_wh[0]
+        if hparams.feature_img_crop:
+            fl_w, fl_h = self.train_fl_dataset.feature_loss_crop_size
+        else:
+            fl_w, fl_h = self.train_fl_dataset.img_wh
+
         if self.hparams.dataset_name == 'llff':
             fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
         # reassemble ray data struct
