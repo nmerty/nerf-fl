@@ -9,6 +9,7 @@ from pytorch_lightning.loggers import TestTubeLogger
 from torch.utils.data import DataLoader
 
 from datasets import dataset_dict
+from datasets.dataset_utils import dataset_with_img_rays_together
 from datasets.ray_utils import get_ndc_rays, get_rays
 from feature_losses.vgg_loss import VGGLoss
 from losses import loss_dict
@@ -145,7 +146,15 @@ class NeRFSystem(LightningModule):
             downsample_factor = self.hparams.feature_img_downsample
             w, h = tuple(self.hparams.img_wh)
             # assert w % downsample_factor == 0 and h % downsample_factor == 0
-            fl_kwargs['img_wh'] = (w // downsample_factor, h // downsample_factor)
+            fl_img_wh = (w // downsample_factor, h // downsample_factor)
+            if not hparams.feature_img_crop:
+                # resize original image
+                fl_kwargs['img_wh'] = fl_img_wh
+            else:  # Crop instead of resize
+                # keep original image size and take crop
+                fl_kwargs['img_wh'] = self.hparams.img_wh
+                fl_kwargs['feature_loss_crop_size'] = fl_img_wh
+
             print(f'fl_kwargs: {fl_kwargs}')
             self.train_fl_dataset = dataset(split='train', feature_loss=True, **fl_kwargs)
             self.train_fl_loader = DataLoader(
@@ -179,8 +188,18 @@ class NeRFSystem(LightningModule):
                 {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose, 'interval': 'step'}},)
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset,
-                          shuffle=True,
+        if self.hparams.img_rays_together:
+            ds = dataset_with_img_rays_together(self.train_dataset,
+                                                self.hparams.img_wh,
+                                                self.hparams.batch_size,
+                                                self.hparams.num_imgs_in_batch)
+            shuffle = False  # already shuffled
+        else:
+            ds = self.train_dataset
+            shuffle = True
+
+        return DataLoader(ds,
+                          shuffle=shuffle,
                           num_workers=4,
                           batch_size=self.hparams.batch_size,
                           pin_memory=True)
@@ -455,7 +474,8 @@ def main(hparams):
                       accelerator='ddp' if hparams.num_gpus>1 else None,
                       num_sanity_val_steps=1,
                       benchmark=True,
-                      profiler="simple" if hparams.num_gpus==1 else None)
+                      profiler="simple" if hparams.num_gpus == 1 else None,
+                      reload_dataloaders_every_epoch=hparams.img_rays_together)  # needed if img_rays_together
 
     trainer.fit(system)
 

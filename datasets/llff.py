@@ -298,7 +298,6 @@ class LLFFDataset(Dataset):
             else:
                 # Keep rays of images together
                 self.all_rays = torch.stack(self.all_rays, 0)  # ((N_images-1), h*w, 6)
-                self.all_rgbs = torch.stack(self.all_rgbs, 0)  # ((N_images-1), h*w, 3)
 
         elif self.split == 'val':
             print('val image is', self.image_paths[val_idx])
