@@ -12,6 +12,7 @@ class PosEmbedding(nn.Module):
         """
         super(PosEmbedding, self).__init__()
         self.funcs = [torch.sin, torch.cos]
+        self.N_freqs = N_freqs
 
         self.epoch_start = epoch_start
         self.epoch_end = epoch_end
