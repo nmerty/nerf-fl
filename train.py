@@ -9,6 +9,7 @@ from pytorch_lightning.loggers import TestTubeLogger
 from torch.utils.data import DataLoader
 
 from datasets import dataset_dict
+from datasets.dataset_utils import dataset_with_img_rays_together
 from datasets.ray_utils import get_ndc_rays, get_rays
 from feature_losses.vgg_loss import VGGLoss
 from losses import loss_dict
@@ -162,7 +163,15 @@ class NeRFSystem(LightningModule):
             downsample_factor = self.hparams.feature_img_downsample
             w, h = tuple(self.hparams.img_wh)
             # assert w % downsample_factor == 0 and h % downsample_factor == 0
-            fl_kwargs['img_wh'] = (w // downsample_factor, h // downsample_factor)
+            fl_img_wh = (w // downsample_factor, h // downsample_factor)
+            if not hparams.feature_img_crop:
+                # resize original image
+                fl_kwargs['img_wh'] = fl_img_wh
+            else:  # Crop instead of resize
+                # keep original image size and take crop
+                fl_kwargs['img_wh'] = self.hparams.img_wh
+                fl_kwargs['feature_loss_crop_size'] = fl_img_wh
+
             print(f'fl_kwargs: {fl_kwargs}')
             self.train_fl_dataset = dataset(split='train', feature_loss=True, **fl_kwargs)
             self.train_fl_loader = DataLoader(
@@ -196,8 +205,18 @@ class NeRFSystem(LightningModule):
                 {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose, 'interval': 'step'}},)
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset,
-                          shuffle=True,
+        if self.hparams.img_rays_together:
+            ds = dataset_with_img_rays_together(self.train_dataset,
+                                                self.hparams.img_wh,
+                                                self.hparams.batch_size,
+                                                self.hparams.num_imgs_in_batch)
+            shuffle = False  # already shuffled
+        else:
+            ds = self.train_dataset
+            shuffle = True
+
+        return DataLoader(ds,
+                          shuffle=shuffle,
                           num_workers=4,
                           batch_size=self.hparams.batch_size,
                           pin_memory=True)
@@ -257,7 +276,10 @@ class NeRFSystem(LightningModule):
 
         opt1.zero_grad()
         opt2.zero_grad()
-        self.manual_backward(loss)  # Backward pass for NeRF loss
+
+        # Use same compute graph for both losses if they share the pose input
+        retain_graph = _apply_feature_loss and not hparams.apply_feature_loss_exclusively
+        self.manual_backward(loss, retain_graph=retain_graph)  # Backward pass for NeRF loss
 
         if _apply_feature_loss and not hparams.apply_feature_loss_exclusively:
             # Combined update step for NeRF and feature loss
@@ -276,7 +298,9 @@ class NeRFSystem(LightningModule):
 
         # Apply feature loss
         if _apply_feature_loss:
-            # print('_apply_feature_loss')
+            print('_apply_feature_loss')
+            # Do inference again if we don't want to use the same compute graph
+            poses = poses if retain_graph else [self.learn_poses(i) for i in range(self.learn_poses.num_cams)]
             feature_loss = self.feature_forward(poses)
             self.manual_backward(feature_loss)
             if hparams.feature_loss_updates == 'scene':
@@ -320,7 +344,11 @@ class NeRFSystem(LightningModule):
 
         # Same as NeRF inference
         fl_rays_o, fl_rays_d = get_rays(fl_rays[:, :3], fl_c2ws)
-        fl_h, fl_w = self.train_fl_dataset.img_wh[1], self.train_fl_dataset.img_wh[0]
+        if hparams.feature_img_crop:
+            fl_w, fl_h = self.train_fl_dataset.feature_loss_crop_size
+        else:
+            fl_w, fl_h = self.train_fl_dataset.img_wh
+
         if self.hparams.dataset_name == 'llff':
             fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
         # reassemble ray data struct
@@ -469,7 +497,8 @@ def main(hparams):
                       accelerator='ddp' if hparams.num_gpus>1 else None,
                       num_sanity_val_steps=1,
                       benchmark=True,
-                      profiler="simple" if hparams.num_gpus==1 else None)
+                      profiler="simple" if hparams.num_gpus == 1 else None,
+                      reload_dataloaders_every_epoch=hparams.img_rays_together)  # needed if img_rays_together
 
     trainer.fit(system)
 

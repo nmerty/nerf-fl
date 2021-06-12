@@ -150,13 +150,25 @@ def get_opts():
                         type=int,
                         )
     parser.add_argument('--feature_img_downsample', type=int, default=4,
-                        help='downsampling factor for the resolution of the image to be used for the feature loss')
+                        help='downsampling factor for the resolution of the image to be used for the feature loss.'
+                             'Original image is cropped if feature_img_crop is True, resized otherwise.')
+    parser.add_argument('--feature_img_crop', action='store_true',
+                        help='RandomCrop feature image instead of resize.')
     parser.add_argument('--apply_feature_loss_exclusively', action='store_true',
                         help='Do not apply NeRF when applying feature loss.')
     parser.add_argument('--feature_loss_coeff', type=float, default=1e-3,
                         help='Multiplier of feature loss contribution to total loss.')
     parser.add_argument('--feature_loss_updates', choices=['scene', 'pose', 'both'], default='both',
                         help='Which parameters to update with the feature loss.')
+
+    # Ordering of input data
+    parser.add_argument('--img_rays_together', action='store_true', help='Dataset should return batch of data from '
+                                                                           'the same image.')
+    parser.add_argument('--num_imgs_in_batch', type=int, default=1, help='How many different images to include in a '
+                                                                           'batch when img_rays_togethe is True. '
+                                                                         'Should '
+                                                                         'divide batch size.')
+
     parser.add_argument('--debug', '-D', action='store_true')
 
     return parser.parse_args()
