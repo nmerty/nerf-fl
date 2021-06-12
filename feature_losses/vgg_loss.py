@@ -44,11 +44,12 @@ class ContentLoss(nn.Module):
 
 
 def gram_matrix(feature):
-    a, b, c, d = feature.size()  # a=batch size(=1)
+    a, b, c, d = feature.size()
+    # a=batch size
     # b=number of feature maps
     # (c,d)=dimensions of a f. map (N=c*d)
 
-    features = feature.view(a * b, c * d)  # resise F_XL into \hat F_XL
+    features = feature.reshape(a * b, c * d)  # resize F_XL into \hat F_XL
 
     G = torch.mm(features, features.t())  # compute the gram product
 
@@ -73,17 +74,15 @@ content_layers_default = ["conv_4"]
 style_layers_default = ["conv_1", "conv_2", "conv_3", "conv_4", "conv_5"]
 
 
-def get_style_model_and_losses(
-        cnn,
-        normalization_mean,
-        normalization_std,
-        style_img,
-        content_img,
-        device,
-        content_layers=None,
-        style_layers=None,
-        pool="max",
-):
+def get_style_model_and_losses(cnn,
+                               normalization_mean,
+                               normalization_std,
+                               content_img,
+                               device,
+                               style_img=None,
+                               content_layers=None,
+                               style_layers=None,
+                               pool="max"):
     if content_layers is None:
         content_layers = content_layers_default
     if style_layers is None:
@@ -150,18 +149,21 @@ def get_style_model_and_losses(
 
 class VGGLoss(nn.Module):
     def __init__(
-            self,
-            device,
-            style_weight=1e6,
-            content_weight=1,
-            content_layers=None,
-            style_layers=None,
+        self,
+        device,
+        style_weight=1e6,
+        content_weight=1,
+        content_layers=None,
+        style_layers=None,
     ):
         # TODO: style_weight and content_weight
         super().__init__()
-        self.style_layers = style_layers
         self.content_layers = content_layers
         self.style_weight = style_weight
+        if self.style_weight is None:
+            self.style_layers = []
+        else:
+            self.style_layers = style_layers
         self.content_weight = content_weight
         self.device = device
         self.cnn = models.vgg19(pretrained=True).features.to(self.device).eval()
@@ -180,16 +182,11 @@ class VGGLoss(nn.Module):
     def forward(self, input_img, style_img, content_img):
         # TODO: Should the initialization be moved to constructor
         # TODO: Do we need style loss?
-        model, style_losses, content_losses = get_style_model_and_losses(
-            self.cnn,
-            self.cnn_normalization_mean,
-            self.cnn_normalization_std,
-            style_img,
-            content_img,
-            device=self.device,
-            content_layers=self.content_layers,
-            style_layers=self.style_layers,
-        )
+        model, style_losses, content_losses = get_style_model_and_losses(self.cnn, self.cnn_normalization_mean,
+                                                                         self.cnn_normalization_std, content_img,
+                                                                         device=self.device, style_img=style_img,
+                                                                         content_layers=self.content_layers,
+                                                                         style_layers=self.style_layers)
         # TODO: Do we need to clamp values?
         # input_img = torch.clamp(input_img, 0, 1)
 
@@ -197,14 +194,15 @@ class VGGLoss(nn.Module):
         style_score = 0
         content_score = 0
 
-        for sl in style_losses:
-            style_score += sl.loss
         for cl in content_losses:
             content_score += cl.loss
 
-        style_score *= self.style_weight
         content_score *= self.content_weight
-
-        loss = style_score + content_score
+        loss = content_score
+        if self.style_weight is not None:
+            for sl in style_losses:
+                style_score += sl.loss
+            style_score *= self.style_weight
+            loss += style_score + content_score
 
         return loss
