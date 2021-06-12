@@ -249,7 +249,10 @@ class NeRFSystem(LightningModule):
 
         opt1.zero_grad()
         opt2.zero_grad()
-        self.manual_backward(loss)  # Backward pass for NeRF loss
+
+        # Use same compute graph for both losses if they share the pose input
+        retain_graph = _apply_feature_loss and not hparams.apply_feature_loss_exclusively
+        self.manual_backward(loss, retain_graph=retain_graph)  # Backward pass for NeRF loss
 
         if _apply_feature_loss and not hparams.apply_feature_loss_exclusively:
             # Combined update step for NeRF and feature loss
@@ -268,7 +271,9 @@ class NeRFSystem(LightningModule):
 
         # Apply feature loss
         if _apply_feature_loss:
-            # print('_apply_feature_loss')
+            print('_apply_feature_loss')
+            # Do inference again if we don't want to use the same compute graph
+            poses = poses if retain_graph else [self.learn_poses(i) for i in range(self.learn_poses.num_cams)]
             feature_loss = self.feature_forward(poses)
             self.manual_backward(feature_loss)
             if hparams.feature_loss_updates == 'scene':
