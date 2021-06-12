@@ -197,12 +197,15 @@ class NeRFSystem(LightningModule):
         optimizer = get_optimizer(self.hparams, self.models_to_train)
         scheduler = get_scheduler(self.hparams, optimizer)
 
-        optimizer_pose = Adam(get_parameters(self.learn_poses), lr=self.hparams.lr_pose, eps=1e-8,
-                                   weight_decay=self.hparams.weight_decay)
-        scheduler_pose = MultiStepLR(optimizer_pose, milestones=self.hparams.decay_step_pose, gamma=self.hparams.decay_gamma_pose)
+        if self.hparams.refine_pose:
+            optimizer_pose = Adam(get_parameters(self.learn_poses), lr=self.hparams.lr_pose, eps=1e-8,
+                                  weight_decay=self.hparams.weight_decay)
+            scheduler_pose = MultiStepLR(optimizer_pose, milestones=self.hparams.decay_step_pose,
+                                         gamma=self.hparams.decay_gamma_pose)
 
-        return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}},
-                {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose, 'interval': 'step'}},)
+            return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}},
+                    {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose, 'interval': 'step'}},)
+        return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}})
 
     def train_dataloader(self):
         if self.hparams.img_rays_together:
