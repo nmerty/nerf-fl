@@ -184,6 +184,7 @@ class PhototourismDataset(Dataset):
         
         elif self.split in ['val', 'test_train']: # use the first image as val image (also in train)
             self.val_id = self.img_ids_train[0]
+            self.val_poses = torch.tensor([self.poses[self.val_id]])
 
         else: # for testing, create a parametric rendering path
             # test poses and appearance index are defined in eval.py
@@ -226,11 +227,10 @@ class PhototourismDataset(Dataset):
             img = img.view(3, -1).permute(1, 0) # (h*w, 3) RGB
             sample['rgbs'] = img
 
-            directions = get_ray_directions(img_h, img_w, self.Ks[self.image_to_cam[id_]])
-            rays_o, rays_d = get_rays(directions, c2w)
-            rays = torch.cat([rays_o, rays_d,
-                              self.nears[id_]*torch.ones_like(rays_o[:, :1]),
-                              self.fars[id_]*torch.ones_like(rays_o[:, :1])],
+            directions = get_ray_directions(img_h, img_w, self.Ks[self.image_to_cam[id_]]).view(-1, 3)
+            rays = torch.cat([directions,
+                              self.nears[id_]*torch.ones_like(directions[:, :1]),
+                              self.fars[id_]*torch.ones_like(directions[:, :1])],
                               1) # (h*w, 8)
             sample['rays'] = rays
             sample['ts'] = id_ * torch.ones(len(rays), dtype=torch.long)
