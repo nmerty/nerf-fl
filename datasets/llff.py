@@ -169,7 +169,6 @@ class LLFFDataset(Dataset):
         self.split = split
         self.img_wh = img_wh
         self.spheric_poses = spheric_poses
-        self.val_num = max(1, val_num) # at least 1
         self.define_transforms()
 
         self.read_meta()
@@ -223,9 +222,13 @@ class LLFFDataset(Dataset):
         # See https://github.com/bmild/nerf/issues/34
         poses = np.concatenate([poses[..., 0:1], -poses[..., 1:3], poses[..., 3:4]], -1)
         self.poses, _ = center_poses(poses)
-        distances_from_center = np.linalg.norm(self.poses[..., 3], axis=1)
-        val_idx = np.argmin(distances_from_center) # choose val image as the closest to
+        # last 10%
+        N_poses = len(poses)
+        val_idx = np.array(list(range(int(np.ceil(9*N_poses/10)), N_poses))) # last 10% as val
                                                    # center image
+
+        self.val_img_paths = [path for i, path in enumerate(self.image_paths) if i in val_idx]
+        self.image_paths = [path for i, path in enumerate(self.image_paths) if i not in val_idx]
 
         # Step 3: correct scale so that the nearest depth is at a little more than 1.0
         # See https://github.com/bmild/nerf/issues/34
@@ -236,7 +239,7 @@ class LLFFDataset(Dataset):
         self.poses[..., 3] /= scale_factor
 
         self.val_idx = val_idx
-        self.val_poses = np.stack([self.poses[self.val_idx][:3, :4]])
+        self.val_poses = self.poses[self.val_idx][:3, :4]
         self.poses = np.delete(self.poses, self.val_idx, axis=0)
 
         self.poses_dict = {i: self.poses[i] for i in range(self.poses.shape[0])}
@@ -250,8 +253,6 @@ class LLFFDataset(Dataset):
             self.all_rays = []
             self.all_rgbs = []
             for i, image_path in enumerate(self.image_paths):
-                if i == val_idx: # exclude the val image
-                    continue
                 img = Image.open(image_path).convert('RGB')
                 # assert img.size[1]*self.img_wh[0] == img.size[0]*self.img_wh[1], \
                 #     f'''{image_path} has different aspect ratio than img_wh, 
@@ -269,8 +270,7 @@ class LLFFDataset(Dataset):
                     near = self.bounds.min()
                     far = min(8 * near, self.bounds.max()) # focus on central object only
 
-                img_id = i if i < val_idx else i-1  # ignore val id (hack)
-                rays_t = img_id * torch.ones(len(directions), 1)
+                rays_t = i * torch.ones(len(directions), 1)
                 # save direction instead of camera center/dir in world space
                 self.all_rays += [torch.cat([directions,
                                              near*torch.ones_like(directions[:, :1]),
@@ -281,7 +281,7 @@ class LLFFDataset(Dataset):
             self.all_rgbs = torch.cat(self.all_rgbs, 0) # ((N_images-1)*h*w, 3)
         
         elif self.split == 'val':
-            print('val image is', self.image_paths[val_idx])
+            print('val image is', ', '.join(self.val_img_paths))
         else: # for testing, create a parametric rendering path
             if self.split.endswith('train'): # test on training set
                 self.poses_test = self.poses
@@ -302,7 +302,7 @@ class LLFFDataset(Dataset):
         if self.split == 'train':
             return len(self.all_rays)
         if self.split == 'val':
-            return self.val_num
+            return len(self.val_idx)
         if self.split == 'test_train':
             return len(self.poses)
         return len(self.poses_test)
@@ -334,14 +334,16 @@ class LLFFDataset(Dataset):
                               1) # (h*w, 6)
 
             sample = {'rays': rays,
-                      'ts': self.val_idx,
+                      'ts': self.val_idx[idx],
                       'c2w': c2w
                       }
 
             if self.split in ['val', 'test_train']:
                 if self.split == 'val':
-                    idx = self.val_idx  # todo what here
-                img = Image.open(self.image_paths[idx]).convert('RGB')
+                    path = self.val_img_paths[idx]
+                else:
+                    path = self.image_paths[idx]
+                img = Image.open(path).convert('RGB')
                 img = img.resize(self.img_wh, Image.LANCZOS)
                 img = self.transform(img) # (3, h, w)
                 img = img.view(3, -1).permute(1, 0) # (h*w, 3)
