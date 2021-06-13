@@ -131,23 +131,32 @@ def get_opts():
                         help='frequency of applying feature loss',
                         type=int,
                         )
-    parser.add_argument('--feature_img_downsample', type=int, default=4,
+    parser.add_argument('--feature_img_downsample', type=int,
                         help='downsampling factor for the resolution of the image to be used for the feature loss.'
+                             'Original image is cropped if feature_img_crop is True, resized otherwise.')
+    parser.add_argument('--feature_img_rand_crop', type=int, nargs=2,
+                        help='minimum and maximum downsampling factor for the resolution of the image to be used for '
+                             'the feature loss.'
                              'Original image is cropped if feature_img_crop is True, resized otherwise.')
     parser.add_argument('--feature_img_crop', action='store_true',
                         help='RandomCrop feature image instead of resize.')
     parser.add_argument('--apply_feature_loss_exclusively', action='store_true',
-                        help='Do not apply NeRF when applying feature loss.')
+                        help='Regular NeRF and Feature forward apply separate optimization steps.')
     parser.add_argument('--feature_loss_coeff', type=float, default=1e-3,
                         help='Multiplier of feature loss contribution to total loss.')
     parser.add_argument('--feature_loss_updates', choices=['scene', 'pose', 'both'], default='both',
                         help='Which parameters to update with the feature loss.')
+    parser.add_argument('--feature_fwd_apply_nerf', action='store_true',
+                        help='Apply NeRF RGB Loss to feature forward images.')
+    parser.add_argument('--empty_cache_b4_fl_forward',
+                        action='store_true',
+                        help='Empty cuda cache before applying feature loss to free up space.')
 
     # Ordering of input data
     parser.add_argument('--img_rays_together', action='store_true', help='Dataset should return batch of data from '
-                                                                           'the same image.')
+                                                                         'the same image.')
     parser.add_argument('--num_imgs_in_batch', type=int, default=1, help='How many different images to include in a '
-                                                                           'batch when img_rays_togethe is True. '
+                                                                         'batch when img_rays_togethe is True. '
                                                                          'Should '
                                                                          'divide batch size.')
 

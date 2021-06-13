@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from datasets import dataset_dict
 from datasets.dataset_utils import dataset_with_img_rays_together
 from datasets.ray_utils import get_ndc_rays, get_rays
+from datasets.transform_utils import random_crop_tensors
 from feature_losses.vgg_loss import VGGLoss
 from losses import loss_dict
 # metrics
@@ -90,6 +91,8 @@ class NeRFSystem(LightningModule):
             self.models['fine'] = self.nerf_fine
             load_ckpt(self.nerf_fine, hparams.weight_path, 'nerf_fine')
 
+        self.feature_loss_crop_size = None
+
     def get_progress_bar_dict(self):
         items = super().get_progress_bar_dict()
         items.pop("v_num", None)
@@ -134,17 +137,21 @@ class NeRFSystem(LightningModule):
         if self.use_feature_loss:
             fl_kwargs = kwargs.copy()
             # We might use lower resolution images
-            downsample_factor = self.hparams.feature_img_downsample
+            downsample_factor = self.hparams.feature_img_downsample or 1
             w, h = tuple(self.hparams.img_wh)
             # assert w % downsample_factor == 0 and h % downsample_factor == 0
-            fl_img_wh = (w // downsample_factor, h // downsample_factor)
-            if not hparams.feature_img_crop:
+            fl_downsampled_img_wh = (w // downsample_factor, h // downsample_factor)
+            if not self.hparams.feature_img_crop:
                 # resize original image
-                fl_kwargs['img_wh'] = fl_img_wh
+                fl_kwargs['img_wh'] = fl_downsampled_img_wh
             else:  # Crop instead of resize
                 # keep original image size and take crop
                 fl_kwargs['img_wh'] = self.hparams.img_wh
-                fl_kwargs['feature_loss_crop_size'] = fl_img_wh
+                if not self.hparams.feature_img_rand_crop:
+                    self.feature_loss_crop_size = fl_downsampled_img_wh  # Fixed crop size
+                else:
+                    self.hparams.feature_img_rand_crop = sorted(self.hparams.feature_img_rand_crop)
+                    # feature_loss_crop_size will be set randomly at feature_forward
 
             print(f'fl_kwargs: {fl_kwargs}')
             self.train_fl_dataset = dataset(split='train', feature_loss=True, **fl_kwargs)
@@ -274,6 +281,10 @@ class NeRFSystem(LightningModule):
             print('_apply_feature_loss')
             # Do inference again if we don't want to use the same compute graph
             poses = poses if retain_graph else [self.learn_poses(i) for i in range(self.learn_poses.num_cams)]
+            # Cache can be emptied to free up space for the feature forward
+            # will result in slower training
+            if self.hparams.empty_cache_b4_fl_forward:
+                torch.cuda.empty_cache()
             feature_loss = self.feature_forward(poses)
             self.manual_backward(feature_loss)
             if hparams.feature_loss_updates == 'scene':
@@ -293,6 +304,32 @@ class NeRFSystem(LightningModule):
         # scheduler2.step()
         # return loss
 
+    def set_fl_random_crop_size(self):
+        """
+        Helper function for setting the dataset random crop size for feature_forward
+        """
+        downsample_factor = torch.randint(self.hparams.feature_img_rand_crop[0],
+                                          self.hparams.feature_img_rand_crop[1] + 1,
+                                          size=(1,)).item()
+        # print(f'Random Crop size -> {downsample_factor}')
+        fl_img_wh = self.train_fl_dataset.img_wh
+        crop_size = fl_img_wh[0] // downsample_factor, fl_img_wh[1] // downsample_factor
+        self.feature_loss_crop_size = crop_size
+
+    def resize_fl_input(self, batch_imgs, batch_rays):
+        # Crop image and get corresponding rays
+        b, c, h, w = batch_imgs.shape
+        # to image shape
+        # rays B x H * W x 5
+        batch_rays = batch_rays.permute(0, 2, 1).view(b, -1, h, w)  # B x 5 x H x W
+        fl_w, fl_h = self.feature_loss_crop_size
+        # print(f'Random crop size {self.feature_loss_crop_size}')
+        batch_imgs, batch_rays = random_crop_tensors(fl_h, fl_w, batch_imgs, batch_rays)
+
+        # back to NeRF expected shape
+        batch_rays = batch_rays.view(b, -1, fl_w * fl_h).permute(0, 2, 1)
+        return batch_imgs, batch_rays
+
     def feature_forward(self, poses):
         """
         Do a forward pass for the feature loss.
@@ -303,8 +340,20 @@ class NeRFSystem(LightningModule):
         feature_loss_ = self.get_feature_loss(content_weight=1.0, style_weight=0.0).to(self.device)
         fl_batch = next(self.train_fl_iter)
 
-        fl_rays, fl_ts, fl_imgs_gt = fl_batch['rays'].to(self.device), fl_batch['ts'].to(self.device), fl_batch[
-            'img'].to(self.device)
+        fl_rays, fl_ts, fl_imgs_gt = fl_batch['rays'], fl_batch['ts'], fl_batch['img']
+
+        if self.hparams.feature_img_rand_crop:
+            self.set_fl_random_crop_size()
+
+        # Crop images if needed
+        if self.feature_loss_crop_size:
+            fl_imgs_gt, fl_rays = self.resize_fl_input(fl_imgs_gt, fl_rays)
+
+        fl_b, fl_c, fl_h, fl_w = fl_imgs_gt.shape
+        fl_rgbs = fl_imgs_gt.view(fl_b, fl_c, -1).permute(0, 2, 1)
+
+        fl_rays, fl_ts, fl_imgs_gt, fl_rgbs = fl_rays.to(self.device), fl_ts.to(self.device), \
+                                              fl_imgs_gt.to(self.device), fl_rgbs.to(self.device)
         fl_c2ws = torch.stack([poses[int(img_id)] for img_id in fl_ts])[:, :3]  # (N_images, 3)
 
         # Merge first two dimensions i.e. use batch of rays instead of batch of images for inference
@@ -317,10 +366,6 @@ class NeRFSystem(LightningModule):
 
         # Same as NeRF inference
         fl_rays_o, fl_rays_d = get_rays(fl_rays[:, :3], fl_c2ws)
-        if hparams.feature_img_crop:
-            fl_w, fl_h = self.train_fl_dataset.feature_loss_crop_size
-        else:
-            fl_w, fl_h = self.train_fl_dataset.img_wh
 
         if self.hparams.dataset_name == 'llff':
             fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
@@ -334,14 +379,25 @@ class NeRFSystem(LightningModule):
             .view(fl_n_images, fl_h, fl_w, 3) \
             .permute(0, 3, 1, 2)  # (B, 3, H, W)
 
-        # Put a feature loss
-        # for img_idx in range(len(fl_imgs)):
-        #     img_gt = fl_imgs_gt[img_idx]
-        #     img = fl_imgs[img_idx].unsqueeze(0)  # fake batch dimension
-        #     feature_loss += self.feature_loss(img, img_gt, img_gt)
         feature_loss = feature_loss_(fl_imgs, fl_imgs_gt, fl_imgs_gt)
         self.log(f'train/{self.hparams.feature_loss}_loss', feature_loss)
         feature_loss = feature_loss * hparams.feature_loss_coeff
+
+        # Apply RGB loss next to feature loss
+        if self.hparams.feature_fwd_apply_nerf:
+            fl_rgbs = fl_rgbs.view(fl_n_images * fl_n_rays_per_image, -1)
+            # print(f'FL results {fl_results[f"rgb_{typ}"].shape}')
+            # print(f'FL rgbs {fl_rgbs.shape}')
+
+            loss = self.loss(fl_results, fl_rgbs)
+
+            with torch.no_grad():
+                psnr_ = psnr(fl_results[f'rgb_{typ}'], fl_rgbs)
+
+            self.log('train/loss', loss)
+            self.log('train/psnr', psnr_, prog_bar=True)
+            feature_loss += loss
+
         return feature_loss
 
     def validation_step(self, batch, batch_nb):
@@ -407,7 +463,6 @@ class NeRFSystem(LightningModule):
             img_gt = img_gt.unsqueeze(0)
             feature_loss = feature_loss_(img, img_gt, img_gt)
             log[f'val_{self.hparams.feature_loss}_loss'] = feature_loss
-            log[f'val_total_loss'] = feature_loss + log['val_loss']
 
         return log
 
@@ -415,6 +470,10 @@ class NeRFSystem(LightningModule):
         mean_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
         mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
+
+        if self.use_feature_loss:
+            mean_feature_loss = torch.stack([x[f'val_{self.hparams.feature_loss}_loss'] for x in outputs]).mean()
+            self.log(f'val/{self.hparams.feature_loss}_loss', mean_feature_loss)
 
         self.log('val/loss', mean_loss)
         self.log('val/psnr', mean_psnr, prog_bar=True)
