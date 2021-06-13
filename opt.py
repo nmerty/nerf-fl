@@ -41,7 +41,7 @@ def get_opts():
 
     parser.add_argument('--use_disp', default=False, action="store_true",
                         help='use disparity depth sampling')
-    parser.add_argument('--perturb', type=float, default=0.0,
+    parser.add_argument('--perturb', type=float, default=1.0,
                         help='factor to perturb depth sampling points')
     parser.add_argument('--noise_std', type=float, default=1.0,
                         help='std dev of noise added to regularize sigma')

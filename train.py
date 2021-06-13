@@ -37,24 +37,30 @@ def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name, title=""):
     # ax4 = fig.add_subplot(224, projection='3d')
     bounds = {'llff': 0.5,
               'blender': 5,
+              'phototourism': 0.5,
               't&t': 0.8, }[dataset_name]
 
     fw = np.array([0,0,-1])
-    rotGT = np.array(gt[:,:3,:3]@fw, dtype=np.float32)
-    rotPose = np.array(poses[:,:3,:3]@fw, dtype=np.float32)
-    rotVal = np.array(val_poses[:,:3,:3]@fw, dtype=np.float32)
     arrow_length = bounds / 15
 
     ax.axes.set_xlim3d(left=-bounds, right=bounds)
     ax.axes.set_ylim3d(bottom=-bounds, top=bounds)
     # ax.axes.set_zlim3d(bottom=-0.15, top=bounds)
+
+    rotGT = np.array(gt[:, :3, :3] @ fw, dtype=np.float32)
     ax.quiver(gt[:, 0, 3], gt[:, 1, 3], gt[:, 2, 3], rotGT[:, 0], rotGT[:, 1], rotGT[:, 2], length=arrow_length, normalize=True, colors='k', label='GT')
+
+    rotVal = np.array(val_poses[:, :3, :3] @ fw, dtype=np.float32)
     ax.quiver(val_poses[:, 0, 3], val_poses[:, 1, 3], val_poses[:, 2, 3], rotVal[:, 0], rotVal[:, 1], rotVal[:, 2], length=arrow_length, normalize=True, colors='b', label='val')
-    ax.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:, 0], rotPose[:, 1], rotPose[:, 2], length=arrow_length, normalize=True, colors='r', label='pred')
+
+    if poses is not None:
+        rotPose = np.array(poses[:,:3,:3]@fw, dtype=np.float32)
+        ax.quiver(poses[:, 0, 3], poses[:, 1, 3], poses[:, 2, 3], rotPose[:, 0], rotPose[:, 1], rotPose[:, 2], length=arrow_length, normalize=True, colors='r', label='pred')
     ax.set_title(f"Epoch: {current_epoch}")
 
     ax2.plot(gt[:, 0, 3], gt[:, 1, 3], 'k.', label='GT')
-    ax2.plot(poses[:, 0, 3], poses[:, 1, 3], 'r.', label='pred')
+    if poses is not None:
+        ax2.plot(poses[:, 0, 3], poses[:, 1, 3], 'r.', label='pred')
     ax2.plot(val_poses[:, 0, 3], val_poses[:, 1, 3], 'b.', label='val')
     ax2.legend()
     plt.tight_layout()
@@ -202,10 +208,11 @@ class NeRFSystem(LightningModule):
                                   weight_decay=self.hparams.weight_decay)
             scheduler_pose = MultiStepLR(optimizer_pose, milestones=self.hparams.decay_step_pose,
                                          gamma=self.hparams.decay_gamma_pose)
-
-            return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}},
-                    {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose, 'interval': 'step'}},)
-        return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}})
+        else:  # will be ignored
+            optimizer_pose = get_optimizer(self.hparams, self.learn_poses)
+            scheduler_pose = get_scheduler(self.hparams, optimizer)
+        return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}},
+                {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose, 'interval': 'step'}},)
 
     def train_dataloader(self):
         if self.hparams.img_rays_together:
@@ -255,7 +262,8 @@ class NeRFSystem(LightningModule):
         self.learn_poses.train()
 
         poses = [self.learn_poses(i) for i in range(self.learn_poses.num_cams)]
-        c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
+        ids_to_num = {id_: i for i, id_ in enumerate(self.train_dataset.img_ids)}  # todo for phototourism only
+        c2ws = torch.stack([poses[ids_to_num[int(img_id)]] for img_id in ts])[:, :3]
 
         rays_o, rays_d = get_rays(rays[:, :3], c2ws)
         if self.hparams.dataset_name == 'llff':
@@ -398,7 +406,8 @@ class NeRFSystem(LightningModule):
 
                 # gt coord system, val pose already there
                 val_poses2plot = self.val_dataset.val_poses
-                fig, ax = save_pose_plot(c2ws_est_aligned.cpu().numpy(), gt.cpu().numpy(), val_poses2plot, self.global_step // hparams.N_images, self.hparams.dataset_name, "GT space")
+                pred_poses = c2ws_est_aligned.cpu().numpy() if self.hparams.refine_pose else None
+                fig, ax = save_pose_plot(pred_poses, gt.cpu().numpy(), val_poses2plot, self.global_step // hparams.N_images, self.hparams.dataset_name, "GT space")
                 self.logger.experiment.add_figure('val/path', fig, self.global_step)
                 # fig, ax = save_pose_plot(poses.cpu().numpy(), align_ate_c2b_use_a2b(gt.cpu(), poses.cpu()).numpy(), val_pose_aligned.cpu().numpy(), self.global_step // hparams.N_images, self.hparams.dataset_name, "pred space")
                 # self.logger.experiment.add_figure('val/path_estimate', fig, self.global_step)
@@ -416,8 +425,11 @@ class NeRFSystem(LightningModule):
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
         loss_d = self.loss(results, rgbs)
         log['val_loss'] = sum(l for l in loss_d.values())
-
-        W, H = self.hparams.img_wh
+        if self.hparams.dataset_name == 'phototourism':
+            WH = batch['img_wh']
+            W, H = WH[0, 0].item(), WH[0, 1].item()
+        else:
+            W, H = self.hparams.img_wh
         img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1)  # (3, H, W)
         img_gt = rgbs.view(H, W, 3).permute(2, 0, 1)  # (3, H, W)
 
@@ -430,7 +442,7 @@ class NeRFSystem(LightningModule):
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
         log['val_psnr'] = psnr_
 
-        ssim_ = ssim(results[f'rgb_{typ}'].view(1, *self.hparams.img_wh, 3), rgbs.view(1, *self.hparams.img_wh, 3))
+        ssim_ = ssim(results[f'rgb_{typ}'].view(1, W, H, 3), rgbs.view(1, W, H, 3))
         log['val_ssim'] = ssim_
 
         if self.use_feature_loss:

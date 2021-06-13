@@ -187,6 +187,6 @@ class NeRF(nn.Module):
         transient_rgb = self.transient_rgb(transient_encoding)  # (B, 3)
         transient_beta = self.transient_beta(transient_encoding)  # (B, 1)
 
-        transient = torch.cat([transient_rgb, transient_sigma,
-                               transient_beta], 1)  # (B, 5)
-        torch.cat([static, transient], 1)  # (B, 9)
+        transient = torch.cat([transient_rgb, transient_sigma, transient_beta], 1)  # (B, 5)
+
+        return torch.cat([static, transient], 1)  # (B, 9)
