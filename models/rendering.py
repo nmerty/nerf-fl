@@ -192,7 +192,7 @@ def render_rays(models,
             # the rgb maps here are when both fields exist
             results['_rgb_fine_static'] = static_rgb_map
             results['_rgb_fine_transient'] = transient_rgb_map
-            results['rgb_fine'] = static_rgb_map + transient_rgb_map
+            results[f'rgb_{typ}'] = static_rgb_map + transient_rgb_map  # todo check correctness, should be integrated together
 
             if test_time:
                 # Compute also static and transient rgbs when only one field exists.
@@ -263,7 +263,17 @@ def render_rays(models,
     xyz_coarse = rays_o + rays_d * rearrange(z_vals, 'n1 n2 -> n1 n2 1')
 
     results = {}
-    output_transient = False
+    output_transient = models['coarse'].encode_transient
+    if models['coarse'].encode_appearance:
+        if 'a_embedded' in kwargs:
+            a_embedded = kwargs['a_embedded']
+        else:
+            a_embedded = embeddings['a'](ts)
+    if output_transient:
+        if 't_embedded' in kwargs:
+            t_embedded = kwargs['t_embedded']
+        else:
+            t_embedded = embeddings['t'](ts)
     inference(results, models['coarse'], xyz_coarse, z_vals, test_time, **kwargs)
 
     if N_importance > 0: # sample points for fine model
