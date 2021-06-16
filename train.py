@@ -199,9 +199,10 @@ class NeRFSystem(LightningModule):
         c2ws = convert3x4_4x4(torch.from_numpy(self.train_dataset.poses))
         refine_pose = self.hparams.refine_pose
 
+        pose_sigma = self.hparams.pose_sigma if hparams.refine_pose and hparams.pose_init == 'perturb' else 0
         initial_poses = c2ws.float() if not refine_pose or hparams.pose_init in ['original', 'perturb'] else None
         self.learn_poses = LearnPose(len(self.train_dataset.poses_dict.keys()), refine_pose, refine_pose,
-                                     init_c2w=initial_poses, perturb_sigma=self.hparams.pose_sigma)#.to(self.device)
+                                     init_c2w=initial_poses, perturb_sigma=pose_sigma)#.to(self.device)
         # load_ckpt(self.learn_poses, hparams...)
 
     def configure_optimizers(self):
@@ -479,6 +480,9 @@ class NeRFSystem(LightningModule):
 def main(hparams):
     N_iter_in_epoch = hparams.N_images
     max_iter = N_iter_in_epoch * hparams.num_epochs
+
+    if hparams.refine_pose and hparams.pose_init == 'perturb':
+        assert hparams.pose_sigma > 0
 
     if hparams.lr_scheduler == 'steplr':
         step_lr_iter = hparams.N_images  # change lr every n steps
