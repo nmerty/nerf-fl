@@ -445,6 +445,26 @@ class NeRFSystem(LightningModule):
             stack = torch.stack([img_gt.cpu(), img.cpu(), depth])  # (3, 3, H, W)
             self.logger.experiment.add_images('val/GT_pred_depth', stack, self.global_step)
 
+            if self.hparams.dataset_name == 'phototourism':
+                if self.hparams.encode_t:
+                    beta = results['beta'].view(H, W).cpu().numpy()
+                    img_pred_static = results['_rgb_fine_static'].view(H, W, 3).cpu().numpy()
+                    img_pred_transient = results['_rgb_fine_transient'].view(H, W, 3).cpu().numpy()
+
+                    fig = plt.figure(figsize=(15, 4))
+                    plt.tight_layout()
+                    ax131 = fig.add_subplot(131)
+                    ax131.set_title('static')
+                    ax131.imshow(img_pred_static)
+                    ax132 = fig.add_subplot(132)
+                    ax132.set_title('transient')
+                    ax132.imshow(img_pred_transient)
+                    ax133 = fig.add_subplot(133)
+                    ax133.set_title('uncertainty (beta)')
+                    beta_min = 0.03
+                    ax133.imshow(beta - beta_min, cmap='gray')
+                    self.logger.experiment.add_figure('val/GT_pred_static', fig, self.global_step)
+
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
         log['val_psnr'] = psnr_
 
