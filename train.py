@@ -210,12 +210,19 @@ class NeRFSystem(LightningModule):
                           pin_memory=True)
 
     def get_feature_loss(self, content_weight=1.0, style_weight=None, ):
-        if self.hparams.feature_loss == 'vgg':
+        fl = self.hparams.feature_loss
+        if fl in ['vgg', 'cx']:
+            if fl == 'vgg':
+                content_loss_type = ContentLossType.L2
+            else:
+                content_loss_type = ContentLossType.Contextual
+
             vgg_loss = VGGLoss(
                 style_weight=style_weight,
                 content_weight=content_weight,
                 content_layers=["conv_1", "conv_2", "conv_3", "conv_4", "conv_5"],
                 style_layers=[],
+                content_loss_type=content_loss_type,
                 device=self.device
             )
             return vgg_loss

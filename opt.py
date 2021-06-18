@@ -120,7 +120,7 @@ def get_opts():
                         help='Feature loss to use.',
                         default=None,
                         type=str,
-                        choices=['vgg'],
+                        choices=['vgg', 'cx'],
                         )
     parser.add_argument('--fl_batch_size',
                         help='batch size for the feature loss i.e. number of images',
