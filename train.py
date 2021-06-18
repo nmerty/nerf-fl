@@ -12,7 +12,7 @@ from datasets import dataset_dict
 from datasets.dataset_utils import dataset_with_img_rays_together
 from datasets.ray_utils import get_ndc_rays, get_rays
 from datasets.transform_utils import random_crop_tensors
-from feature_losses.vgg_loss import VGGLoss
+from feature_losses.vgg_loss import ContentLossType, VGGLoss
 from losses import loss_dict
 # metrics
 from metrics import *
