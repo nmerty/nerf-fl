@@ -304,7 +304,17 @@ class NeRFSystem(LightningModule):
             # will result in slower training
             if self.hparams.empty_cache_b4_fl_forward:
                 torch.cuda.empty_cache()
-            feature_loss = self.feature_forward(poses)
+            feature_loss, feature_rgb_loss, feature_psnr = self.feature_forward(poses)
+            # Feature losses should be logged here and not in feature_forward
+            # Otherwise they are not shown :(
+            self.log(f'train/{self.hparams.feature_loss}_loss', feature_loss)
+            feature_loss = feature_loss * hparams.feature_loss_coeff
+            if feature_rgb_loss is not None:
+                feature_loss += feature_rgb_loss
+                self.log('train/feature_rgb_loss', feature_rgb_loss)
+            if feature_psnr is not None:
+                self.log('train/feature_psnr', feature_psnr)
+
             self.manual_backward(feature_loss)
             if hparams.feature_loss_updates == 'scene':
                 # Feature loss only updates scene
@@ -400,25 +410,20 @@ class NeRFSystem(LightningModule):
             .permute(0, 3, 1, 2)  # (B, 3, H, W)
 
         feature_loss = feature_loss_(fl_imgs, fl_imgs_gt, fl_imgs_gt)
-        self.log(f'train/{self.hparams.feature_loss}_loss', feature_loss)
-        feature_loss = feature_loss * hparams.feature_loss_coeff
 
+        rgb_loss, psnr_ = None, None
         # Apply RGB loss next to feature loss
         if self.hparams.feature_fwd_apply_nerf:
             fl_rgbs = fl_rgbs.view(fl_n_images * fl_n_rays_per_image, -1)
             # print(f'FL results {fl_results[f"rgb_{typ}"].shape}')
             # print(f'FL rgbs {fl_rgbs.shape}')
 
-            loss = self.loss(fl_results, fl_rgbs)
+            rgb_loss = self.loss(fl_results, fl_rgbs)
 
             with torch.no_grad():
                 psnr_ = psnr(fl_results[f'rgb_{typ}'], fl_rgbs)
 
-            self.log('train/loss', loss)
-            self.log('train/psnr', psnr_, prog_bar=True)
-            feature_loss += loss
-
-        return feature_loss
+        return feature_loss, rgb_loss, psnr_
 
     def validation_step(self, batch, batch_nb):
         log = {}
@@ -478,11 +483,16 @@ class NeRFSystem(LightningModule):
         log['val_ssim'] = ssim_
 
         if self.use_feature_loss:
-            feature_loss_ = self.get_feature_loss().to(self.device)
-            img = img.unsqueeze(0)
-            img_gt = img_gt.unsqueeze(0)
-            feature_loss = feature_loss_(img, img_gt, img_gt)
-            log[f'val_{self.hparams.feature_loss}_loss'] = feature_loss
+            if self.hparams.feature_loss == 'cx':
+                # TODO: Resize image accordingly
+                # warnings.warn('Complete image does not fit to GPU with CX loss.')
+                pass
+            else:
+                feature_loss_ = self.get_feature_loss().to(self.device)
+                img = img.unsqueeze(0)
+                img_gt = img_gt.unsqueeze(0)
+                feature_loss = feature_loss_(img, img_gt, img_gt)
+                log[f'val_{self.hparams.feature_loss}_loss'] = feature_loss
 
         return log
 
@@ -491,7 +501,7 @@ class NeRFSystem(LightningModule):
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
         mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
 
-        if self.use_feature_loss:
+        if self.use_feature_loss and not self.hparams.feature_loss == 'cx':
             mean_feature_loss = torch.stack([x[f'val_{self.hparams.feature_loss}_loss'] for x in outputs]).mean()
             self.log(f'val/{self.hparams.feature_loss}_loss', mean_feature_loss)
 
@@ -537,6 +547,7 @@ def main(hparams):
 
     trainer = Trainer(max_steps=max_iter,
                       val_check_interval=N_iter_in_epoch * 5,
+                      fast_dev_run=N_iter_in_epoch if hparams.debug else False,
                       checkpoint_callback=True,
                       callbacks=[checkpoint_callback],
                       resume_from_checkpoint=hparams.ckpt_path,
