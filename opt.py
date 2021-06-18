@@ -44,6 +44,8 @@ def get_opts():
     # Unknown/inaccurate camera poses
     parser.add_argument('--refine_pose', default=False, action="store_true",
                         help='whether to refine input camera poses')
+    parser.add_argument('--alternating_opt', default=False, action='store_true',
+                        help='Switch between pose and scene optimization each batch.')
     parser.add_argument('--pose_init', type=str, choices=['identity', 'perturb', 'original'], default='original',
                         help='How to initialize poses when optimizing for them too')
     parser.add_argument('--pose_sigma', type=float, default=0,

@@ -230,7 +230,14 @@ class NeRFSystem(LightningModule):
             raise NotImplementedError
 
     def training_step(self, batch, batch_nb, optimizer_idx):
-        opt1, opt2 = self.optimizers()
+        opt_scene, opt_pose = self.optimizers()
+
+        if self.hparams.alternating_opt:
+            # Switch between pose and scene optimization each batch
+            optimize_scene = batch_nb % 2 == 0
+            optimize_pose = not optimize_scene
+        else:
+            optimize_scene, optimize_pose = True, True
 
         # Apply feature loss every n batch
         _apply_feature_loss = self.use_feature_loss and batch_nb % self.hparams.fl_every_n_batch == 0
@@ -255,14 +262,14 @@ class NeRFSystem(LightningModule):
         with torch.no_grad():
             psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
 
-        self.log('lr', get_learning_rate(opt1))
+        self.log('lr', get_learning_rate(opt_scene))
         if self.hparams.refine_pose:
-            self.log('lr_pose', get_learning_rate(opt2))
+            self.log('lr_pose', get_learning_rate(opt_pose))
         self.log('train/loss', loss)
         self.log('train/psnr', psnr_, prog_bar=True)
 
-        opt1.zero_grad()
-        opt2.zero_grad()
+        opt_scene.zero_grad()
+        opt_pose.zero_grad()
 
         # Use same compute graph for both losses if they share the pose input
         retain_graph = _apply_feature_loss and not hparams.apply_feature_loss_exclusively
@@ -274,18 +281,23 @@ class NeRFSystem(LightningModule):
             pass
         elif _apply_feature_loss and hparams.apply_feature_loss_exclusively:
             # Step for NeRF loss and reset gradients for feature loss backward pass
-            opt1.step()
-            opt2.step()
-            opt1.zero_grad()
-            opt2.zero_grad()
+            # print('Feature loss exclusive')
+            if optimize_scene:
+                opt_scene.step()
+            if optimize_pose:
+                opt_pose.step()
+            opt_scene.zero_grad()
+            opt_pose.zero_grad()
         elif not _apply_feature_loss:
             # Step for NeRF loss -> done
-            opt1.step()
-            opt2.step()
+            if optimize_scene:
+                opt_scene.step()
+            if optimize_pose:
+                opt_pose.step()
 
         # Apply feature loss
         if _apply_feature_loss:
-            print('_apply_feature_loss')
+            # print('_apply_feature_loss')
             # Do inference again if we don't want to use the same compute graph
             poses = poses if retain_graph else [self.learn_poses(i) for i in range(self.learn_poses.num_cams)]
             # Cache can be emptied to free up space for the feature forward
@@ -296,13 +308,14 @@ class NeRFSystem(LightningModule):
             self.manual_backward(feature_loss)
             if hparams.feature_loss_updates == 'scene':
                 # Feature loss only updates scene
-                opt1.step()
+                opt_scene.step()
             elif hparams.feature_loss_updates == 'pose':
                 # Feature loss only updates pose
-                opt2.step()
+                opt_pose.step()
             else:
-                opt1.step()
-                opt2.step()
+                # Optimizes both regardless of self.hparams.alternating_opt
+                opt_scene.step()
+                opt_pose.step()
 
         # before 1.3 automatically called https://pytorch-lightning.readthedocs.io/en/latest/common/optimizers.html
         # #learning-rate-scheduling-manual
