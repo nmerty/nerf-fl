@@ -212,8 +212,11 @@ class NeRFSystem(LightningModule):
         if self.hparams.refine_pose:
             optimizer_pose = Adam(get_parameters(self.learn_poses), lr=self.hparams.lr_pose, eps=1e-8,
                                   weight_decay=self.hparams.weight_decay)
-            scheduler_pose = MultiStepLR(optimizer_pose, milestones=self.hparams.decay_step_pose,
-                                         gamma=self.hparams.decay_gamma_pose)
+            if hparams.lr_scheduler == 'steplr':
+                scheduler_pose = MultiStepLR(optimizer_pose, milestones=self.hparams.decay_step_pose,
+                                             gamma=self.hparams.decay_gamma_pose)
+            else:
+                scheduler_pose = get_scheduler(self.hparams, optimizer_pose)
         else:  # will be ignored
             optimizer_pose = get_optimizer(self.hparams, self.learn_poses)
             scheduler_pose = get_scheduler(self.hparams, optimizer)
