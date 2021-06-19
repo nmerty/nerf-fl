@@ -3,11 +3,13 @@ from typing import List
 
 import os
 
+import tqdm
 import tensorflow as tf
 import imageio
 from tensorboard.compat.proto import event_pb2
 
 TensorBoardImage = namedtuple("TensorBoardImage", ["topic", "image", "cnt"])
+
 
 def extract_images_from_event(event_filename: str, image_tags: List[str]):
     topic_counter = defaultdict(lambda: 0)
@@ -46,12 +48,12 @@ def extract_images_from_event(event_filename: str, image_tags: List[str]):
 
 
 if __name__ == '__main__':
-    out_root = '/mnt/raid/dkomorowicz/plots'
 
     tags = ['val/GT_pred_depth', 'val/GT_pred_static', 'val/path']
 
-    in_path = '/mnt/raid/dkomorowicz/david_save_nerfw/logs'
-    for exp_name in os.listdir(in_path):
+    in_path = '/mnt/raid/dkomorowicz/david_save/logs'
+    out_root = '/mnt/raid/dkomorowicz/david_save/plots'
+    for exp_name in tqdm.tqdm(os.listdir(in_path)):
         for version in os.listdir(os.path.join(in_path, exp_name)):
             dirname = os.path.join(in_path, exp_name, version, 'tf')
             filename = os.listdir(dirname)
