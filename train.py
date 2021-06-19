@@ -93,12 +93,7 @@ class NeRFSystem(LightningModule):
 
         self.nerf_coarse = NeRF('coarse',
                                 in_channels_xyz=6 * hparams.N_emb_xyz + 3,
-                                in_channels_dir=6 * hparams.N_emb_dir + 3,
-                                encode_appearance=hparams.encode_a and self.hparams.N_importance == 0,
-                                in_channels_a=hparams.N_a,
-                                encode_transient=hparams.encode_t and self.hparams.N_importance == 0,
-                                in_channels_t=hparams.N_tau,
-                                beta_min=hparams.beta_min)
+                                in_channels_dir=6 * hparams.N_emb_dir + 3)
         self.models = {'coarse': self.nerf_coarse}
         load_ckpt(self.nerf_coarse, hparams.weight_path, 'nerf_coarse')
         self.automatic_optimization = False
