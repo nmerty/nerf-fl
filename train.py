@@ -308,13 +308,19 @@ class NeRFSystem(LightningModule):
             feature_loss, feature_rgb_loss, feature_psnr = self.feature_forward(poses)
             # Feature losses should be logged here and not in feature_forward
             # Otherwise they are not shown :(
-            self.log(f'train/{self.hparams.feature_loss}_loss', feature_loss)
+            self.logger.experiment.add_scalar(f'fl/{self.hparams.feature_loss}_loss',
+                                              feature_loss,
+                                              global_step=self.global_step)
             feature_loss = feature_loss * hparams.feature_loss_coeff
             if feature_rgb_loss is not None:
                 feature_loss += feature_rgb_loss
-                self.log('train/feature_rgb_loss', feature_rgb_loss)
+                self.logger.experiment.add_scalar('fl/rgb_loss',
+                                                  feature_rgb_loss,
+                                                  global_step=self.global_step)
             if feature_psnr is not None:
-                self.log('train/feature_psnr', feature_psnr)
+                self.logger.experiment.add_scalar('fl/psnr',
+                                                  feature_psnr,
+                                                  global_step=self.global_step)
 
             self.manual_backward(feature_loss)
             if hparams.feature_loss_updates == 'scene':
