@@ -7,6 +7,7 @@ from pytorch_lightning import LightningModule, Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TestTubeLogger
 from torch.utils.data import DataLoader
+from torchvision.transforms import functional
 
 from datasets import dataset_dict
 from datasets.dataset_utils import dataset_with_img_rays_together
@@ -91,7 +92,7 @@ class NeRFSystem(LightningModule):
             self.models['fine'] = self.nerf_fine
             load_ckpt(self.nerf_fine, hparams.weight_path, 'nerf_fine')
 
-        self.feature_loss_crop_size = None
+        self.feature_loss_crop_wh = None
 
     def get_progress_bar_dict(self):
         items = super().get_progress_bar_dict()
@@ -148,7 +149,7 @@ class NeRFSystem(LightningModule):
                 # keep original image size and take crop
                 fl_kwargs['img_wh'] = self.hparams.img_wh
                 if not self.hparams.feature_img_rand_crop:
-                    self.feature_loss_crop_size = fl_downsampled_img_wh  # Fixed crop size
+                    self.feature_loss_crop_wh = fl_downsampled_img_wh  # Fixed crop size
                 else:
                     self.hparams.feature_img_rand_crop = sorted(self.hparams.feature_img_rand_crop)
                     # feature_loss_crop_size will be set randomly at feature_forward
@@ -343,8 +344,8 @@ class NeRFSystem(LightningModule):
                                           size=(1,)).item()
         # print(f'Random Crop size -> {downsample_factor}')
         fl_img_wh = self.train_fl_dataset.img_wh
-        crop_size = fl_img_wh[0] // downsample_factor, fl_img_wh[1] // downsample_factor
-        self.feature_loss_crop_size = crop_size
+        crop_wh = fl_img_wh[0] // downsample_factor, fl_img_wh[1] // downsample_factor
+        self.feature_loss_crop_wh = crop_wh
 
     def resize_fl_input(self, batch_imgs, batch_rays):
         # Crop image and get corresponding rays
@@ -352,7 +353,7 @@ class NeRFSystem(LightningModule):
         # to image shape
         # rays B x H * W x 5
         batch_rays = batch_rays.permute(0, 2, 1).view(b, -1, h, w)  # B x 5 x H x W
-        fl_w, fl_h = self.feature_loss_crop_size
+        fl_w, fl_h = self.feature_loss_crop_wh
         # print(f'Random crop size {self.feature_loss_crop_size}')
         batch_imgs, batch_rays = random_crop_tensors(fl_h, fl_w, batch_imgs, batch_rays)
 
@@ -367,7 +368,7 @@ class NeRFSystem(LightningModule):
         Returns: Feature loss result
         """
 
-        feature_loss_ = self.get_feature_loss(content_weight=1.0, style_weight=0.0).to(self.device)
+        feature_loss_ = self.get_feature_loss().to(self.device)
         fl_batch = next(self.train_fl_iter)
 
         fl_rays, fl_ts, fl_imgs_gt = fl_batch['rays'], fl_batch['ts'], fl_batch['img']
@@ -376,7 +377,7 @@ class NeRFSystem(LightningModule):
             self.set_fl_random_crop_size()
 
         # Crop images if needed
-        if self.feature_loss_crop_size:
+        if self.feature_loss_crop_wh:
             fl_imgs_gt, fl_rays = self.resize_fl_input(fl_imgs_gt, fl_rays)
 
         fl_b, fl_c, fl_h, fl_w = fl_imgs_gt.shape
@@ -483,16 +484,21 @@ class NeRFSystem(LightningModule):
         log['val_ssim'] = ssim_
 
         if self.use_feature_loss:
+            feature_loss_ = self.get_feature_loss().to(self.device)
             if self.hparams.feature_loss == 'cx':
-                # TODO: Resize image accordingly
-                # warnings.warn('Complete image does not fit to GPU with CX loss.')
-                pass
-            else:
-                feature_loss_ = self.get_feature_loss().to(self.device)
-                img = img.unsqueeze(0)
-                img_gt = img_gt.unsqueeze(0)
-                feature_loss = feature_loss_(img, img_gt, img_gt)
-                log[f'val_{self.hparams.feature_loss}_loss'] = feature_loss
+                # have to resize, otherwise it doesn't fit to GPU
+                im_h, im_w = img.shape[-2:]
+                if self.hparams.feature_img_rand_crop:
+                    downsample_factor = self.hparams.feature_img_rand_crop[0]  # sorted
+                    new_h,new_w = im_h // downsample_factor, im_w // downsample_factor
+                else:
+                    new_h,new_w = self.feature_loss_crop_wh  # Fixed crop size
+                img = functional.resize(img, [new_h,new_w])
+                img_gt = functional.resize(img_gt, [new_h,new_w])
+            img = img.unsqueeze(0)
+            img_gt = img_gt.unsqueeze(0)
+            feature_loss = feature_loss_(img, img_gt, img_gt)
+            log[f'val_{self.hparams.feature_loss}_loss'] = feature_loss
 
         return log
 
