@@ -1,9 +1,18 @@
 import copy
+from enum import Enum
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models
+
+from feature_losses.contextual_loss import CX_loss
+
+
+class ContentLossType(Enum):
+    L2 = "L2"
+    Contextual = "CX"
+
 
 NORMALIZATION_MEAN = [0.485, 0.456, 0.406]
 NORMALIZATION_STD = [0.229, 0.224, 0.225]
@@ -27,19 +36,22 @@ class Normalization(nn.Module):
 
 
 class ContentLoss(nn.Module):
-    def __init__(
-            self,
-            target,
-    ):
+    def __init__(self, target, loss_type: ContentLossType = ContentLossType.L2):
         super(ContentLoss, self).__init__()
         # we 'detach' the target content from the tree used
         # to dynamically compute the gradient: this is a stated value,
         # not a variable. Otherwise the forward method of the criterion
         # will throw an error.
+        self.loss_type = loss_type
+        self.loss_ = None
+        if self.loss_type == ContentLossType.L2:
+            self.loss_ = lambda x: F.mse_loss(x, self.target)
+        elif self.loss_type == ContentLossType.Contextual:
+            self.loss_ = lambda x: CX_loss(self.target, x)
         self.target = target.detach()
 
     def forward(self, x):
-        self.loss = F.mse_loss(x, self.target)
+        self.loss = self.loss_(x)
         return x
 
 
@@ -74,15 +86,18 @@ content_layers_default = ["conv_4"]
 style_layers_default = ["conv_1", "conv_2", "conv_3", "conv_4", "conv_5"]
 
 
-def get_style_model_and_losses(cnn,
-                               normalization_mean,
-                               normalization_std,
-                               content_img,
-                               device,
-                               style_img=None,
-                               content_layers=None,
-                               style_layers=None,
-                               pool="max"):
+def get_style_model_and_losses(
+    cnn,
+    normalization_mean,
+    normalization_std,
+    content_img,
+    device,
+    style_img=None,
+    content_layers=None,
+    style_layers=None,
+    pool="max",
+    content_loss_type: ContentLossType = ContentLossType.L2,
+):
     if content_layers is None:
         content_layers = content_layers_default
     if style_layers is None:
@@ -126,7 +141,7 @@ def get_style_model_and_losses(cnn,
         if name in content_layers:
             # add content loss:
             target = model(content_img).detach()
-            content_loss = ContentLoss(target)
+            content_loss = ContentLoss(target, loss_type=content_loss_type)
             model.add_module("content_loss_{}".format(i), content_loss)
             content_losses.append(content_loss)
 
@@ -155,9 +170,11 @@ class VGGLoss(nn.Module):
         content_weight=1,
         content_layers=None,
         style_layers=None,
+        content_loss_type: ContentLossType = ContentLossType.L2,
     ):
         # TODO: style_weight and content_weight
         super().__init__()
+        self.content_loss = content_loss_type
         self.content_layers = content_layers
         self.style_weight = style_weight
         if self.style_weight is None:
@@ -182,11 +199,17 @@ class VGGLoss(nn.Module):
     def forward(self, input_img, style_img, content_img):
         # TODO: Should the initialization be moved to constructor
         # TODO: Do we need style loss?
-        model, style_losses, content_losses = get_style_model_and_losses(self.cnn, self.cnn_normalization_mean,
-                                                                         self.cnn_normalization_std, content_img,
-                                                                         device=self.device, style_img=style_img,
-                                                                         content_layers=self.content_layers,
-                                                                         style_layers=self.style_layers)
+        model, style_losses, content_losses = get_style_model_and_losses(
+            self.cnn,
+            self.cnn_normalization_mean,
+            self.cnn_normalization_std,
+            content_img,
+            device=self.device,
+            style_img=style_img,
+            content_layers=self.content_layers,
+            style_layers=self.style_layers,
+            content_loss_type=self.content_loss,
+        )
         # TODO: Do we need to clamp values?
         # input_img = torch.clamp(input_img, 0, 1)
 
