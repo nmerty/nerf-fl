@@ -276,6 +276,8 @@ class NeRFSystem(LightningModule):
         retain_graph = _apply_feature_loss and not hparams.apply_feature_loss_exclusively
         self.manual_backward(loss, retain_graph=retain_graph)  # Backward pass for NeRF loss
 
+        # self.track_grads('train', only_pose=True)
+
         if _apply_feature_loss and not hparams.apply_feature_loss_exclusively:
             # Combined update step for NeRF and feature loss
             # Done later
@@ -323,6 +325,7 @@ class NeRFSystem(LightningModule):
                                                   global_step=self.global_step)
 
             self.manual_backward(feature_loss)
+            # self.track_grads('fl', only_pose=True)
             if hparams.feature_loss_updates == 'scene':
                 # Feature loss only updates scene
                 opt_scene.step()
@@ -341,6 +344,14 @@ class NeRFSystem(LightningModule):
         # scheduler2.step()
         # return loss
 
+    def log_grads(self, tag, only_pose=False):
+        global_step = self.global_step
+        for name, param in self.named_parameters():
+            if only_pose and not name.startswith('learn_poses'):
+                continue
+            if param.requires_grad:
+                self.logger.experiment.add_histogram(f"{tag}/{name}_grad", param.grad, global_step)
+
     def set_fl_random_crop_size(self):
         """
         Helper function for setting the dataset random crop size for feature_forward
@@ -353,7 +364,7 @@ class NeRFSystem(LightningModule):
         crop_wh = fl_img_wh[0] // downsample_factor, fl_img_wh[1] // downsample_factor
         self.feature_loss_crop_wh = crop_wh
 
-    def resize_fl_input(self, batch_imgs, batch_rays):
+    def crop_fl_input(self, batch_imgs, batch_rays):
         # Crop image and get corresponding rays
         b, c, h, w = batch_imgs.shape
         # to image shape
@@ -384,8 +395,7 @@ class NeRFSystem(LightningModule):
 
         # Crop images if needed
         if self.feature_loss_crop_wh:
-            fl_imgs_gt, fl_rays = self.resize_fl_input(fl_imgs_gt, fl_rays)
-
+            fl_imgs_gt, fl_rays = self.crop_fl_input(fl_imgs_gt, fl_rays)
         fl_b, fl_c, fl_h, fl_w = fl_imgs_gt.shape
         fl_rgbs = fl_imgs_gt.view(fl_b, fl_c, -1).permute(0, 2, 1)
 
@@ -403,9 +413,13 @@ class NeRFSystem(LightningModule):
 
         # Same as NeRF inference
         fl_rays_o, fl_rays_d = get_rays(fl_rays[:, :3], fl_c2ws)
-
+        # When using a crop -> ndc should use train_dataset.img_wh
         if self.hparams.dataset_name == 'llff':
-            fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
+            if self.feature_loss_crop_wh:
+                fl_rays_o, fl_rays_d = get_ndc_rays(self.train_dataset.img_wh[1], self.train_dataset.img_wh[0],
+                                                    self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
+            else:  # rays belonged to scaled space -> ndc use fl_dataset.img_wh
+                fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
         # reassemble ray data struct
         fl_rays_ = torch.cat([fl_rays_o, fl_rays_d, fl_rays[:, 3:]], 1)
         fl_results = self(fl_rays_)
@@ -415,13 +429,15 @@ class NeRFSystem(LightningModule):
         fl_imgs = fl_results[f'rgb_{typ}'] \
             .view(fl_n_images, fl_h, fl_w, 3) \
             .permute(0, 3, 1, 2)  # (B, 3, H, W)
+        self.logger.experiment.add_images('fl/gt', fl_imgs_gt.cpu(), self.global_step)
+        self.logger.experiment.add_images('fl/pred', fl_imgs.cpu(), self.global_step)
 
         feature_loss = feature_loss_(fl_imgs, fl_imgs_gt, fl_imgs_gt)
 
         rgb_loss, psnr_ = None, None
         # Apply RGB loss next to feature loss
         if self.hparams.feature_fwd_apply_nerf:
-            fl_rgbs = fl_rgbs.view(fl_n_images * fl_n_rays_per_image, -1)
+            fl_rgbs = fl_rgbs.view(fl_n_images * fl_n_rays_per_image, 3)
             # print(f'FL results {fl_results[f"rgb_{typ}"].shape}')
             # print(f'FL rgbs {fl_rgbs.shape}')
 
@@ -495,12 +511,15 @@ class NeRFSystem(LightningModule):
                 # have to resize, otherwise it doesn't fit to GPU
                 im_h, im_w = img.shape[-2:]
                 if self.hparams.feature_img_rand_crop:
+                    # Get minimum downsample factor given
                     downsample_factor = self.hparams.feature_img_rand_crop[0]  # sorted
-                    new_h,new_w = im_h // downsample_factor, im_w // downsample_factor
-                else:
-                    new_h,new_w = self.feature_loss_crop_wh  # Fixed crop size
-                img = functional.resize(img, [new_h,new_w])
-                img_gt = functional.resize(img_gt, [new_h,new_w])
+                    new_h, new_w = im_h // downsample_factor, im_w // downsample_factor
+                elif self.feature_loss_crop_wh:
+                    new_w, new_h = self.feature_loss_crop_wh  # Fixed crop size
+                else: # downsampled not cropped
+                    new_w, new_h = self.train_fl_dataset.img_wh
+                img = functional.resize(img, [new_h, new_w])
+                img_gt = functional.resize(img_gt, [new_h, new_w])
             img = img.unsqueeze(0)
             img_gt = img_gt.unsqueeze(0)
             feature_loss = feature_loss_(img, img_gt, img_gt)
