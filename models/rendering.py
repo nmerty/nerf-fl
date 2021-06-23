@@ -132,7 +132,7 @@ def render_rays(models,
                     inputs += [a_embedded_[i:i + chunk]]
                 if output_transient:
                     inputs += [t_embedded_[i:i + chunk]]
-                out_chunks += [model(torch.cat(inputs, 1), output_transient=output_transient)]
+                out_chunks += [model(torch.cat(inputs, 1), output_transient=output_transient)] # todo crop bad for encoding size
 
             out = torch.cat(out_chunks, 0)
 

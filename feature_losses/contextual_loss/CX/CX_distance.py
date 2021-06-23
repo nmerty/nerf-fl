@@ -38,7 +38,7 @@ class CSFlow:
         sI = I_features.shape
 
         Ivecs = torch.reshape(I_features, (sI[0], -1, sI[3]))
-        Tvecs = torch.reshape(T_features, (sI[0], -1, sT[3]))
+        Tvecs = torch.reshape(T_features, (sT[0], -1, sT[3]))
         r_Ts = torch.sum(Tvecs * Tvecs, 2)
         r_Is = torch.sum(Ivecs * Ivecs, 2)
         raw_distances_list = []

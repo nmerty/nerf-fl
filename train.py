@@ -357,9 +357,10 @@ class NeRFSystem(LightningModule):
                                               global_step=self.global_step)
             feature_loss = feature_loss * hparams.feature_loss_coeff
             if feature_rgb_loss is not None:
-                feature_loss += feature_rgb_loss
-                self.logger.experiment.add_scalar('fl/rgb_loss',
-                                                  feature_rgb_loss,
+                for key, item in feature_rgb_loss.items():
+                    feature_loss += item
+                    self.logger.experiment.add_scalar(f'fl/rgb_loss_{key}',
+                                                  item,
                                                   global_step=self.global_step)
             if feature_psnr is not None:
                 self.logger.experiment.add_scalar('fl/psnr',
@@ -402,7 +403,10 @@ class NeRFSystem(LightningModule):
                                           self.hparams.feature_img_rand_crop[1] + 1,
                                           size=(1,)).item()
         # print(f'Random Crop size -> {downsample_factor}')
-        fl_img_wh = self.train_fl_dataset.img_wh
+        if self.hparams.dataset_name == 'phototourism':
+            fl_img_wh = [1000, 1000]
+        else:
+            fl_img_wh = self.train_fl_dataset.img_wh
         crop_wh = fl_img_wh[0] // downsample_factor, fl_img_wh[1] // downsample_factor
         self.feature_loss_crop_wh = crop_wh
 
@@ -412,7 +416,13 @@ class NeRFSystem(LightningModule):
         # to image shape
         # rays B x H * W x 5
         batch_rays = batch_rays.permute(0, 2, 1).view(b, -1, h, w)  # B x 5 x H x W
-        fl_w, fl_h = self.feature_loss_crop_wh
+        if self.hparams.dataset_name == 'phototourism':
+            downsample_factor = torch.randint(self.hparams.feature_img_rand_crop[0],
+                                              self.hparams.feature_img_rand_crop[1] + 1,
+                                              size=(1,)).item()
+            fl_w, fl_h = h // downsample_factor, w // downsample_factor
+        else:
+            fl_w, fl_h = self.feature_loss_crop_wh
         # print(f'Random crop size {self.feature_loss_crop_size}')
         batch_imgs, batch_rays = random_crop_tensors(fl_h, fl_w, batch_imgs, batch_rays)
 
@@ -443,7 +453,11 @@ class NeRFSystem(LightningModule):
 
         fl_rays, fl_ts, fl_imgs_gt, fl_rgbs = fl_rays.to(self.device), fl_ts.to(self.device), \
                                               fl_imgs_gt.to(self.device), fl_rgbs.to(self.device)
-        fl_c2ws = torch.stack([poses[int(img_id)] for img_id in fl_ts])[:, :3]  # (N_images, 3)
+        if self.hparams.dataset_name == 'phototourism':
+            ids_to_num = {id_: i for i, id_ in enumerate(self.train_dataset.img_ids)}  # todo for phototourism only
+            fl_c2ws = torch.stack([poses[ids_to_num[int(img_id)]] for img_id in fl_ts])[:, :3]
+        else:
+            fl_c2ws = torch.stack([poses[int(img_id)] for img_id in fl_ts])[:, :3]  # (N_images, 3)
 
         # Merge first two dimensions i.e. use batch of rays instead of batch of images for inference
         # (N_images, h * w, 6) -> (N_images * h * w, 6)
@@ -464,7 +478,7 @@ class NeRFSystem(LightningModule):
                 fl_rays_o, fl_rays_d = get_ndc_rays(fl_h, fl_w, self.train_fl_dataset.focal, 1.0, fl_rays_o, fl_rays_d)
         # reassemble ray data struct
         fl_rays_ = torch.cat([fl_rays_o, fl_rays_d, fl_rays[:, 3:]], 1)
-        fl_results = self(fl_rays_)
+        fl_results = self(fl_rays_, fl_ts)
 
         typ = 'fine' if 'rgb_fine' in fl_results else 'coarse'
         # Unmerge images dimension
@@ -579,7 +593,9 @@ class NeRFSystem(LightningModule):
                     new_w, new_h = self.train_fl_dataset.img_wh
                 img = functional.resize(img, [new_h, new_w])
                 img_gt = functional.resize(img_gt, [new_h, new_w])
-            img = img.unsqueeze(0)
+            img = img.to(self.device)
+            if len(img.shape) == 3:
+                img = img.unsqueeze(0)
             img_gt = img_gt.unsqueeze(0)
             feature_loss = feature_loss_(img, img_gt, img_gt)
             log[f'val_{self.hparams.feature_loss}_loss'] = feature_loss

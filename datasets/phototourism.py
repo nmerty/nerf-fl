@@ -16,7 +16,7 @@ from .colmap_utils import \
 
 
 class PhototourismDataset(Dataset):
-    def __init__(self, root_dir, split='train', img_downscale=1, val_num=1, use_cache=False, refine_pose=False):
+    def __init__(self, root_dir, split='train', img_wh=(0, 0), img_downscale=1, val_num=1, use_cache=False, feature_loss: bool = False):
         """
         img_downscale: how much scale to downsample the training images.
                        The original image sizes are around 500~100, so value of 1 or 2
@@ -29,7 +29,7 @@ class PhototourismDataset(Dataset):
         """
         self.root_dir = root_dir
         self.split = split
-        self.refine_pose = refine_pose
+        self.feature_loss = feature_loss
         assert img_downscale >= 1, 'image can only be downsampled, please set img_downscale>=1!'
         self.img_downscale = img_downscale
         if split == 'val': # image downscale=1 will cause OOM in val mode
@@ -147,8 +147,11 @@ class PhototourismDataset(Dataset):
         self.N_images_train = len(self.img_ids_train)
         self.N_images_test = len(self.img_ids_test)
 
+        if self.feature_loss:
+            self.images = []
+
         if self.split == 'train': # create buffer of all rays and rgb data
-            if self.use_cache:
+            if self.use_cache and not self.feature_loss:
                 all_rays = np.load(os.path.join(self.root_dir,
                                                 f'cache/rays{self.img_downscale}.npy'))
                 self.all_rays = torch.from_numpy(all_rays)
@@ -167,9 +170,13 @@ class PhototourismDataset(Dataset):
                         img_h = img_h//self.img_downscale
                         img = img.resize((img_w, img_h), Image.LANCZOS)
                     img = self.transform(img) # (3, h, w)
-                    img = img.view(3, -1).permute(1, 0) # (h*w, 3) RGB
-                    self.all_rgbs += [img]
-                    
+                    if self.feature_loss:
+                        self.images.append(img)  # save 2D image C x H x W
+                        # No need to store image twice -> skip saving rgbs
+                    else:
+                        img = img.view(3, -1).permute(1, 0)  # (h*w, 3) RGB
+                        self.all_rgbs += [img]
+
                     directions = get_ray_directions(img_h, img_w, self.Ks[self.image_to_cam[id_]])
                     directions = directions.view(-1, 3)
                     rays_t = id_ * torch.ones(len(directions), 1)
@@ -178,10 +185,14 @@ class PhototourismDataset(Dataset):
                                                 self.fars[id_]*torch.ones_like(directions[:, :1]),
                                                 rays_t],
                                                 1)] # (h*w, 3+1+1+1 = 6)
-                                    
-                self.all_rays = torch.cat(self.all_rays, 0) # ((N_images-1)*h*w, 8)
-                self.all_rgbs = torch.cat(self.all_rgbs, 0) # ((N_images-1)*h*w, 3)
-        
+
+                if not self.feature_loss:
+                    self.all_rays = torch.cat(self.all_rays, 0)  # ((N_images-1)*h*w, 6)
+                    self.all_rgbs = torch.cat(self.all_rgbs, 0)  # ((N_images-1)*h*w, 3)
+                else:
+                    # Keep rays of images together
+                    # self.all_rays = torch.stack(self.all_rays, 0)  # ((N_images-1), h*w, 6)
+                    pass
         elif self.split in ['val', 'test_train']: # use the first image as val image (also in train)
             self.val_id = self.img_ids_train[0]
             self.val_poses = torch.tensor([self.poses[self.val_id]])
@@ -204,9 +215,27 @@ class PhototourismDataset(Dataset):
 
     def __getitem__(self, idx):
         if self.split == 'train': # use data in the buffers
-            sample = {'rays': self.all_rays[idx, :6],
-                      'ts': self.all_rays[idx, -1].long(),
-                      'rgbs': self.all_rgbs[idx]}
+            if not self.feature_loss:
+                sample = {
+                    'rays': self.all_rays[idx, :-1],
+                    'ts': self.all_rays[idx, -1].long(),
+                    'rgbs': self.all_rgbs[idx]
+                }
+            else:
+                rays = self.all_rays[idx][..., :-1]  # H*W x 5
+                img = self.images[idx]  # 3 x H x W
+                ts = self.all_rays[idx][0, -1].long()
+
+                # Flatten image to rgb array
+                # rgbs = img.view(3, -1).permute(1, 0)  # (h*w, 3) RGB
+
+                # Rays and rgbs of an image are all in the same sample together
+                sample = {
+                    'rays': rays,
+                    'ts': ts,
+                    # 'rgbs': rgbs,
+                    'img': img
+                }
 
         elif self.split in ['val', 'test_train']:
             sample = {}
