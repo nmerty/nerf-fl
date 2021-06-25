@@ -286,9 +286,7 @@ class NeRFSystem(LightningModule):
             # Combined update step for NeRF and feature loss
             # Done later
             pass
-        elif _apply_feature_loss and hparams.apply_feature_loss_exclusively:
-            # Step for NeRF loss and reset gradients for feature loss backward pass
-            # print('Feature loss exclusive')
+        else:
             if optimize_scene:
                 opt_scene.step()
                 scheduler_scene.step()
@@ -297,18 +295,9 @@ class NeRFSystem(LightningModule):
                 opt_pose.step()
                 scheduler_pose.step()
                 # print('Optimizing pose')
-            opt_scene.zero_grad()
-            opt_pose.zero_grad()
-        elif not _apply_feature_loss:
-            # Step for NeRF loss -> done
-            if optimize_scene:
-                opt_scene.step()
-                scheduler_scene.step()
-                # print('Optimizing scene')
-            if optimize_pose:
-                opt_pose.step()
-                scheduler_pose.step()
-                # print('Optimizing pose')
+            if _apply_feature_loss and hparams.apply_feature_loss_exclusively:
+                opt_scene.zero_grad()
+                opt_pose.zero_grad()
 
         # Apply feature loss
         if _apply_feature_loss:
