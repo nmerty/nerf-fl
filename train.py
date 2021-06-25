@@ -592,6 +592,8 @@ def main(hparams):
                       profiler="simple" if hparams.num_gpus == 1 else None,
                       reload_dataloaders_every_epoch=hparams.img_rays_together)  # needed if img_rays_together
 
+    trainer.validate(system)
+
     trainer.fit(system)
 
 
