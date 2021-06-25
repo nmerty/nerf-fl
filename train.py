@@ -532,7 +532,7 @@ class NeRFSystem(LightningModule):
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
         mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
 
-        if self.use_feature_loss and not self.hparams.feature_loss == 'cx':
+        if self.use_feature_loss:
             mean_feature_loss = torch.stack([x[f'val_{self.hparams.feature_loss}_loss'] for x in outputs]).mean()
             self.log(f'val/{self.hparams.feature_loss}_loss', mean_feature_loss)
 
@@ -577,7 +577,7 @@ def main(hparams):
                             log_graph=False)
 
     trainer = Trainer(max_steps=max_iter,
-                      val_check_interval=N_iter_in_epoch * 5,
+                      val_check_interval=N_iter_in_epoch * 100,
                       fast_dev_run=N_iter_in_epoch if hparams.debug else False,
                       checkpoint_callback=True,
                       callbacks=[checkpoint_callback],
