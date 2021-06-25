@@ -2,7 +2,7 @@ import os
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
-from pytorch_lightning import LightningModule, Trainer, seed_everything
+from pytorch_lightning import Callback, LightningModule, Trainer, seed_everything
 # pytorch-lightning
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TestTubeLogger
@@ -558,6 +558,12 @@ class NeRFSystem(LightningModule):
             self.log('val/rot', mean_rot)
 
 
+class run_validation_on_start(Callback):
+
+    def on_train_start(self, trainer, pl_module: LightningModule) -> None:
+        trainer.run_evaluation()
+
+
 def main(hparams):
     N_iter_in_epoch = hparams.N_images
     max_iter = N_iter_in_epoch * hparams.num_epochs
@@ -591,7 +597,7 @@ def main(hparams):
                       val_check_interval=N_iter_in_epoch * 5,
                       fast_dev_run=N_iter_in_epoch if hparams.debug else False,
                       checkpoint_callback=True,
-                      callbacks=[checkpoint_callback],
+                      callbacks=[checkpoint_callback, run_validation_on_start()],
                       resume_from_checkpoint=hparams.ckpt_path,
                       logger=logger,
                       weights_summary=None,
