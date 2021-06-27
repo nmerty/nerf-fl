@@ -68,7 +68,7 @@ def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name, title=""):
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
         super(NeRFSystem, self).__init__()
-        self.hparams = hparams
+        self.save_hyperparameters(hparams)
 
         self.loss = loss_dict['color'](coef=1)
 
@@ -183,8 +183,8 @@ class NeRFSystem(LightningModule):
                                    weight_decay=self.hparams.weight_decay)
         scheduler_pose = MultiStepLR(optimizer_pose, milestones=self.hparams.decay_step_pose, gamma=self.hparams.decay_gamma_pose)
 
-        return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler, 'interval': 'step'}},
-                {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose, 'interval': 'step'}},)
+        return ({'optimizer': optimizer, 'lr_scheduler': {'scheduler': scheduler}},
+                {'optimizer': optimizer_pose, 'lr_scheduler': {'scheduler': scheduler_pose}},)
 
     def train_dataloader(self):
         if self.hparams.img_rays_together:
@@ -230,8 +230,12 @@ class NeRFSystem(LightningModule):
         else:
             raise NotImplementedError
 
-    def training_step(self, batch, batch_nb, optimizer_idx):
+    def training_step(self, batch, batch_nb):
         opt_scene, opt_pose = self.optimizers()
+        # before 1.3 schedulers automatically called
+        # https://pytorch-lightning.readthedocs.io/en/latest/common/optimizers.html
+        scheduler_scene, scheduler_pose = self.lr_schedulers()
+        # print(f'Batch {batch_nb}')
 
         if self.hparams.alternating_opt:
             # Switch between pose and scene optimization each batch
@@ -282,21 +286,18 @@ class NeRFSystem(LightningModule):
             # Combined update step for NeRF and feature loss
             # Done later
             pass
-        elif _apply_feature_loss and hparams.apply_feature_loss_exclusively:
-            # Step for NeRF loss and reset gradients for feature loss backward pass
-            # print('Feature loss exclusive')
+        else:
             if optimize_scene:
                 opt_scene.step()
+                scheduler_scene.step()
+                # print('Optimizing scene')
             if optimize_pose:
                 opt_pose.step()
-            opt_scene.zero_grad()
-            opt_pose.zero_grad()
-        elif not _apply_feature_loss:
-            # Step for NeRF loss -> done
-            if optimize_scene:
-                opt_scene.step()
-            if optimize_pose:
-                opt_pose.step()
+                scheduler_pose.step()
+                # print('Optimizing pose')
+            if _apply_feature_loss and hparams.apply_feature_loss_exclusively:
+                opt_scene.zero_grad()
+                opt_pose.zero_grad()
 
         # Apply feature loss
         if _apply_feature_loss:
@@ -329,19 +330,18 @@ class NeRFSystem(LightningModule):
             if hparams.feature_loss_updates == 'scene':
                 # Feature loss only updates scene
                 opt_scene.step()
+                scheduler_scene.step()
             elif hparams.feature_loss_updates == 'pose':
                 # Feature loss only updates pose
                 opt_pose.step()
+                scheduler_pose.step()
             else:
                 # Optimizes both regardless of self.hparams.alternating_opt
                 opt_scene.step()
                 opt_pose.step()
+                scheduler_scene.step()
+                scheduler_pose.step()
 
-        # before 1.3 automatically called https://pytorch-lightning.readthedocs.io/en/latest/common/optimizers.html
-        # #learning-rate-scheduling-manual
-        # scheduler1, scheduler2 = self.lr_schedulers()
-        # scheduler1.step()
-        # scheduler2.step()
         # return loss
 
     def log_grads(self, tag, only_pose=False):
@@ -532,7 +532,7 @@ class NeRFSystem(LightningModule):
         mean_psnr = torch.stack([x['val_psnr'] for x in outputs]).mean()
         mean_ssim = torch.stack([x['val_ssim'] for x in outputs]).mean()
 
-        if self.use_feature_loss and not self.hparams.feature_loss == 'cx':
+        if self.use_feature_loss:
             mean_feature_loss = torch.stack([x[f'val_{self.hparams.feature_loss}_loss'] for x in outputs]).mean()
             self.log(f'val/{self.hparams.feature_loss}_loss', mean_feature_loss)
 
@@ -577,7 +577,7 @@ def main(hparams):
                             log_graph=False)
 
     trainer = Trainer(max_steps=max_iter,
-                      val_check_interval=N_iter_in_epoch * 5,
+                      val_check_interval=N_iter_in_epoch * 100,
                       fast_dev_run=N_iter_in_epoch if hparams.debug else False,
                       checkpoint_callback=True,
                       callbacks=[checkpoint_callback],
@@ -591,6 +591,8 @@ def main(hparams):
                       benchmark=True,
                       profiler="simple" if hparams.num_gpus == 1 else None,
                       reload_dataloaders_every_epoch=hparams.img_rays_together)  # needed if img_rays_together
+
+    trainer.validate(system)
 
     trainer.fit(system)
 
