@@ -292,8 +292,11 @@ class NeRFSystem(LightningModule):
         self.learn_poses.train()
 
         poses = [self.learn_poses(i) for i in range(self.learn_poses.num_cams)]
-        ids_to_num = {id_: i for i, id_ in enumerate(self.train_dataset.img_ids)}  # todo for phototourism only
-        c2ws = torch.stack([poses[ids_to_num[int(img_id)]] for img_id in ts])[:, :3]
+        if self.hparams.dataset_name == 'phototourism':
+            ids_to_num = {id_: i for i, id_ in enumerate(self.train_dataset.img_ids)}
+            c2ws = torch.stack([poses[ids_to_num[int(img_id)]] for img_id in ts])[:, :3]
+        else:
+            c2ws = torch.stack([poses[int(img_id)] for img_id in ts])[:, :3]
 
         rays_o, rays_d = get_rays(rays[:, :3], c2ws)
         if self.hparams.dataset_name == 'llff':
@@ -454,7 +457,7 @@ class NeRFSystem(LightningModule):
         fl_rays, fl_ts, fl_imgs_gt, fl_rgbs = fl_rays.to(self.device), fl_ts.to(self.device), \
                                               fl_imgs_gt.to(self.device), fl_rgbs.to(self.device)
         if self.hparams.dataset_name == 'phototourism':
-            ids_to_num = {id_: i for i, id_ in enumerate(self.train_dataset.img_ids)}  # todo for phototourism only
+            ids_to_num = {id_: i for i, id_ in enumerate(self.train_dataset.img_ids)}
             fl_c2ws = torch.stack([poses[ids_to_num[int(img_id)]] for img_id in fl_ts])[:, :3]
         else:
             fl_c2ws = torch.stack([poses[int(img_id)] for img_id in fl_ts])[:, :3]  # (N_images, 3)
