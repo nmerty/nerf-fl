@@ -162,6 +162,14 @@ def get_opts():
                                                                          'Should '
                                                                          'divide batch size.')
 
+    # Fix some poses
+    parser.add_argument('--learn_pose_ids', default=-1, nargs='+', type=int,
+                        help='Camera ids whose pose should be learnt. If -1 is passed, then all poses will be learned ('
+                             'given refine_pose) is set.')
+    parser.add_argument('--viz_pose_grads', type=int, default=-1,
+                        help='Visualize pose gradients. Skip if -1 passed, visualize every N batch otherwise.', )
+    parser.add_argument('--val_check_interval', type=int)
+
     parser.add_argument('--debug', '-D', action='store_true')
 
     return parser.parse_args()

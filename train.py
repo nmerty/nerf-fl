@@ -19,7 +19,7 @@ from losses import loss_dict
 from metrics import *
 # models
 from models.nerf import *
-from models.poses import LearnPose
+from models.poses import LearnPose, LearnPosePartial
 from models.rendering import *
 from opt import get_opts
 # optimizer, scheduler, visualization
@@ -27,10 +27,12 @@ from utils import *
 from utils.align_traj import align_ate_c2b_use_a2b
 from utils.comp_ate import compute_ate
 from utils.lie_group_helper import convert3x4_4x4
+from utils.pose_grad_viz import viz_pose_grads_sep
 
 
 def save_pose_plot(poses, gt, val_poses, current_epoch, dataset_name, title=""):
-    fig = plt.figure(figsize=plt.figaspect(2))#
+    figsize = np.array(plt.figaspect(2), )
+    fig = plt.figure(figsize=tuple(2 * figsize))  #
     fig.suptitle(title)
 
     ax = fig.add_subplot(211, projection='3d')
@@ -171,8 +173,23 @@ class NeRFSystem(LightningModule):
         refine_pose = self.hparams.refine_pose
 
         initial_poses = c2ws.float() if not refine_pose or hparams.pose_init in ['original', 'perturb'] else None
-        self.learn_poses = LearnPose(len(self.train_dataset.poses_dict.keys()), refine_pose, refine_pose,
-                                     init_c2w=initial_poses, perturb_sigma=self.hparams.pose_sigma)#.to(self.device)
+
+        num_poses = len(self.train_dataset.poses_dict.keys())
+        if hparams.learn_pose_ids == -1:  # Learn all poses if refine_pose is also True
+            self.learn_poses = LearnPose(num_poses, refine_pose, refine_pose,
+                                         init_c2w=initial_poses, perturb_sigma=self.hparams.pose_sigma)  # .to(
+            # self.device)
+        else:  # Fix some poses and learn others
+            # Initialize with identity
+            learn_poses = LearnPose(num_poses, True, True, init_c2w=None, perturb_sigma=0)
+            assert initial_poses is not None
+            fix_poses = LearnPose(num_poses, False, False, init_c2w=initial_poses,
+                                  perturb_sigma=self.hparams.pose_sigma)
+
+            self.learn_poses = LearnPosePartial(
+                learn_poses=learn_poses, fix_poses=fix_poses, learn_ids=hparams.learn_pose_ids
+            )
+
         # load_ckpt(self.learn_poses, hparams...)
 
     def configure_optimizers(self):
@@ -280,7 +297,8 @@ class NeRFSystem(LightningModule):
         retain_graph = _apply_feature_loss and not hparams.apply_feature_loss_exclusively
         self.manual_backward(loss, retain_graph=retain_graph)  # Backward pass for NeRF loss
 
-        # self.track_grads('train', only_pose=True)
+        self.log_grads('train', only_pose=True)
+        self.viz_pose_grads_helper(batch_nb, 'train')
 
         if _apply_feature_loss and not hparams.apply_feature_loss_exclusively:
             # Combined update step for NeRF and feature loss
@@ -326,7 +344,9 @@ class NeRFSystem(LightningModule):
                                                   global_step=self.global_step)
 
             self.manual_backward(feature_loss)
-            # self.track_grads('fl', only_pose=True)
+            self.log_grads('fl', only_pose=True)
+            self.viz_pose_grads_helper(batch_nb, 'fl')
+
             if hparams.feature_loss_updates == 'scene':
                 # Feature loss only updates scene
                 opt_scene.step()
@@ -343,6 +363,74 @@ class NeRFSystem(LightningModule):
                 scheduler_pose.step()
 
         # return loss
+
+    def viz_pose_grads_helper(self, batch_nb, tag):
+        if hparams.viz_pose_grads != -1 and batch_nb % hparams.viz_pose_grads == 0:
+            if hparams.learn_pose_ids == -1:  # learning all poses
+                pose_grads_cam_ids = None
+                self.visualize_pose_grads(tag=tag, cam_ids=pose_grads_cam_ids)
+            else:
+                # pose_grads_cam_ids = self.learn_poses.learn_ids.intersection(ts.cpu().numpy())
+                # pose_grads_cam_ids = sorted(list(pose_grads_cam_ids))
+                pose_grads_cam_ids = sorted(list(self.learn_poses.learn_ids))
+                if len(pose_grads_cam_ids) > 0:  # only visualize when it is optimized over
+                    self.visualize_pose_grads(tag=tag, cam_ids=pose_grads_cam_ids)
+
+    @torch.no_grad()
+    def visualize_pose_grads(self, tag, cam_ids=None):
+        # Align GT with poses
+        global_step = self.global_step
+        if cam_ids is None:  # Visualize all cams
+            cam_ids = list(range(self.learn_poses.num_cams))
+
+        R_grads, t_grads = zip(*[self.learn_poses.cam_grad(i) for i in cam_ids])
+        # pose_grad = torch.stack([self.learn_poses.cam_grad(i) for i in cam_ids]).cpu().numpy()
+        R_grads = torch.stack(R_grads).cpu().numpy()
+        t_grads = torch.stack(t_grads).cpu().numpy()
+
+        poses = torch.stack([self.learn_poses(i) for i in range(self.learn_poses.num_cams)])
+        gt = torch.from_numpy(self.train_dataset.poses)
+
+        print(f'GT:\n{gt[cam_ids].cpu().numpy()}')
+
+        print(f'R grad:\n{R_grads}')
+        print(f't grad:\n{t_grads}')
+
+        # Align GT to predicted poses as we have the gradients in predicted domain
+        gt_aligned = align_ate_c2b_use_a2b(gt, poses).cpu().numpy()
+
+        gt_aligned = gt_aligned[cam_ids]
+        poses = poses[cam_ids]
+
+        print(f'GT aligned:\n{gt_aligned}')
+        poses = poses.cpu().numpy()
+        print(f'Poses:\n{poses}')
+
+        # fw = np.array([0, 0, -1])
+        # rotGT = np.array(gt_aligned[:, :3, :3] @ fw, dtype=np.float32)
+        # rotPose = np.array(poses[:, :3, :3] @ fw, dtype=np.float32)
+        # rotGrad = np.array(pose_grad[:, :3, :3] @ fw, dtype=np.float32)
+
+        rotGT = gt_aligned[:, :3, :3]
+        rotPose = poses[:, :3, :3]
+        # rotGrad = gt_aligned[:, :3, :3]
+
+        print(f'rotGT:\n{rotGT}')
+        print(f'rotPose:\n{rotPose}')
+        # print(f'rotGrad:\n{rotGrad}')
+
+        bounds = {
+            "llff": 0.5,
+            "blender": 5,
+            "t&t": 0.8,
+        }[self.hparams.dataset_name]
+        arrow_length = bounds / 10
+
+        fig = viz_pose_grads_sep(cam_ids, gt_aligned, poses, rotGT, rotPose, t_grads, R_grads,
+                                 bounds, arrow_length, global_step)
+        self.logger.experiment.add_figure(f'{tag}/pose_grads', fig, self.global_step)
+        fig.savefig(f'pose_grads_{global_step:06}.png')
+        plt.close(fig)
 
     def log_grads(self, tag, only_pose=False):
         global_step = self.global_step
@@ -577,7 +665,7 @@ def main(hparams):
                             log_graph=False)
 
     trainer = Trainer(max_steps=max_iter,
-                      val_check_interval=N_iter_in_epoch * 100,
+                      val_check_interval=N_iter_in_epoch * 100 or hparams.val_check_interval,
                       fast_dev_run=N_iter_in_epoch if hparams.debug else False,
                       checkpoint_callback=True,
                       callbacks=[checkpoint_callback],
@@ -592,7 +680,8 @@ def main(hparams):
                       profiler="simple" if hparams.num_gpus == 1 else None,
                       reload_dataloaders_every_epoch=hparams.img_rays_together)  # needed if img_rays_together
 
-    trainer.validate(system)
+    if not hparams.debug:
+        trainer.validate(system)
 
     trainer.fit(system)
 
