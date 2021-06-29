@@ -134,9 +134,9 @@ def viz_pose_grads_sep(
 
         # Rotation gradient attached to predicted pose location
         arrow_length = np.linalg.norm(rotPose_so3 - rotGT_so3) * 0.5
-        print(f"rotPose_so3 {rotPose_so3}")
-        print(f"rotGT_so3 {rotGT_so3}")
-        print(f"norm {arrow_length}")
+        # print(f"rotPose_so3 {rotPose_so3}")
+        # print(f"rotGT_so3 {rotGT_so3}")
+        # print(f"norm {arrow_length}")
         ax3.quiver(
             rotPose_so3[0],
             rotPose_so3[1],

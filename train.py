@@ -298,7 +298,9 @@ class NeRFSystem(LightningModule):
         self.manual_backward(loss, retain_graph=retain_graph)  # Backward pass for NeRF loss
 
         self.log_grads('train', only_pose=True)
-        self.viz_pose_grads_helper(batch_nb, 'train')
+        # print(f'Batch nb {batch_nb}')
+        if hparams.viz_pose_grads != -1 and (batch_nb % hparams.viz_pose_grads == 0 or _apply_feature_loss):
+            self.viz_pose_grads_helper('train')
 
         if _apply_feature_loss and not hparams.apply_feature_loss_exclusively:
             # Combined update step for NeRF and feature loss
@@ -345,7 +347,8 @@ class NeRFSystem(LightningModule):
 
             self.manual_backward(feature_loss)
             self.log_grads('fl', only_pose=True)
-            self.viz_pose_grads_helper(batch_nb, 'fl')
+            if hparams.viz_pose_grads != -1:
+                self.viz_pose_grads_helper('fl')
 
             if hparams.feature_loss_updates == 'scene':
                 # Feature loss only updates scene
@@ -364,17 +367,18 @@ class NeRFSystem(LightningModule):
 
         # return loss
 
-    def viz_pose_grads_helper(self, batch_nb, tag):
-        if hparams.viz_pose_grads != -1 and batch_nb % hparams.viz_pose_grads == 0:
-            if hparams.learn_pose_ids == -1:  # learning all poses
-                pose_grads_cam_ids = None
+    def viz_pose_grads_helper(self, tag):
+        if hparams.learn_pose_ids == -1:  # learning all poses
+            pose_grads_cam_ids = None
+            self.visualize_pose_grads(tag=tag, cam_ids=pose_grads_cam_ids)
+        else:
+            # print('Viz grads')
+            # pose_grads_cam_ids = self.learn_poses.learn_ids.intersection(ts.cpu().numpy())
+            # pose_grads_cam_ids = sorted(list(pose_grads_cam_ids))
+            pose_grads_cam_ids = sorted(list(self.learn_poses.learn_ids))
+            # print(f'Pose grads cam ids {pose_grads_cam_ids}')
+            if len(pose_grads_cam_ids) > 0:  # only visualize when it is optimized over
                 self.visualize_pose_grads(tag=tag, cam_ids=pose_grads_cam_ids)
-            else:
-                # pose_grads_cam_ids = self.learn_poses.learn_ids.intersection(ts.cpu().numpy())
-                # pose_grads_cam_ids = sorted(list(pose_grads_cam_ids))
-                pose_grads_cam_ids = sorted(list(self.learn_poses.learn_ids))
-                if len(pose_grads_cam_ids) > 0:  # only visualize when it is optimized over
-                    self.visualize_pose_grads(tag=tag, cam_ids=pose_grads_cam_ids)
 
     @torch.no_grad()
     def visualize_pose_grads(self, tag, cam_ids=None):
@@ -387,14 +391,17 @@ class NeRFSystem(LightningModule):
         # pose_grad = torch.stack([self.learn_poses.cam_grad(i) for i in cam_ids]).cpu().numpy()
         R_grads = torch.stack(R_grads).cpu().numpy()
         t_grads = torch.stack(t_grads).cpu().numpy()
+        # print(f'R grad:\n{R_grads}')
+        # print(f't grad:\n{t_grads}')
+        if np.count_nonzero(R_grads) + np.count_nonzero(t_grads) == 0:
+            # non of the cameras are optimized
+            # print('Skipping viz')
+            return
 
         poses = torch.stack([self.learn_poses(i) for i in range(self.learn_poses.num_cams)])
         gt = torch.from_numpy(self.train_dataset.poses)
 
-        print(f'GT:\n{gt[cam_ids].cpu().numpy()}')
-
-        print(f'R grad:\n{R_grads}')
-        print(f't grad:\n{t_grads}')
+        # print(f'GT:\n{gt[cam_ids].cpu().numpy()}')
 
         # Align GT to predicted poses as we have the gradients in predicted domain
         gt_aligned = align_ate_c2b_use_a2b(gt, poses).cpu().numpy()
@@ -402,9 +409,9 @@ class NeRFSystem(LightningModule):
         gt_aligned = gt_aligned[cam_ids]
         poses = poses[cam_ids]
 
-        print(f'GT aligned:\n{gt_aligned}')
+        # print(f'GT aligned:\n{gt_aligned}')
         poses = poses.cpu().numpy()
-        print(f'Poses:\n{poses}')
+        # print(f'Poses:\n{poses}')
 
         # fw = np.array([0, 0, -1])
         # rotGT = np.array(gt_aligned[:, :3, :3] @ fw, dtype=np.float32)
@@ -415,8 +422,8 @@ class NeRFSystem(LightningModule):
         rotPose = poses[:, :3, :3]
         # rotGrad = gt_aligned[:, :3, :3]
 
-        print(f'rotGT:\n{rotGT}')
-        print(f'rotPose:\n{rotPose}')
+        # print(f'rotGT:\n{rotGT}')
+        # print(f'rotPose:\n{rotPose}')
         # print(f'rotGrad:\n{rotGrad}')
 
         bounds = {
@@ -429,7 +436,7 @@ class NeRFSystem(LightningModule):
         fig = viz_pose_grads_sep(cam_ids, gt_aligned, poses, rotGT, rotPose, t_grads, R_grads,
                                  bounds, arrow_length, global_step)
         self.logger.experiment.add_figure(f'{tag}/pose_grads', fig, self.global_step)
-        fig.savefig(f'pose_grads_{global_step:06}.png')
+        # fig.savefig(f'{tag}_pose_grads_{global_step:06}.png')
         plt.close(fig)
 
     def log_grads(self, tag, only_pose=False):
@@ -438,7 +445,12 @@ class NeRFSystem(LightningModule):
             if only_pose and not name.startswith('learn_poses'):
                 continue
             if param.requires_grad:
-                self.logger.experiment.add_histogram(f"{tag}/{name}_grad", param.grad, global_step)
+                grad = param.grad
+                if name.startswith('learn_poses') and hparams.learn_pose_ids != -1:
+                    # Show only grads for learned poses
+                    grad = grad[list(hparams.learn_pose_ids)]
+                    # print(f'log_grads {tag}: {list(hparams.learn_pose_ids)} {name}: {grad}')
+                self.logger.experiment.add_histogram(f"{tag}/{name}_grad", grad, global_step)
 
     def set_fl_random_crop_size(self):
         """
@@ -639,6 +651,9 @@ def main(hparams):
     N_iter_in_epoch = hparams.N_images
     max_iter = N_iter_in_epoch * hparams.num_epochs
 
+    if hparams.learn_pose_ids != -1:
+        hparams.learn_pose_ids = sorted(list(hparams.learn_pose_ids))
+
     if hparams.lr_scheduler == 'steplr':
         step_lr_iter = hparams.N_images  # change lr every n steps
 
@@ -665,7 +680,7 @@ def main(hparams):
                             log_graph=False)
 
     trainer = Trainer(max_steps=max_iter,
-                      val_check_interval=N_iter_in_epoch * 100 or hparams.val_check_interval,
+                      val_check_interval=hparams.val_check_interval or N_iter_in_epoch * 100,
                       fast_dev_run=N_iter_in_epoch if hparams.debug else False,
                       checkpoint_callback=True,
                       callbacks=[checkpoint_callback],
